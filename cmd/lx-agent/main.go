@@ -22,7 +22,6 @@ import (
 	"github.com/mgnlia/lx-agent/internal/canvas"
 	"github.com/mgnlia/lx-agent/internal/monitor"
 	"github.com/mgnlia/lx-agent/internal/notifier"
-	"github.com/mgnlia/lx-agent/internal/summarizer"
 )
 
 type config struct {
@@ -37,10 +36,6 @@ type config struct {
 		StatePath      string `yaml:"state_path"`
 		Courses        []int  `yaml:"courses"`
 	} `yaml:"monitor"`
-	Summarizer struct {
-		Provider     string `yaml:"provider"`
-		GeminiAPIKey string `yaml:"gemini_api_key"`
-	} `yaml:"summarizer"`
 	Notifier struct {
 		Provider string `yaml:"provider"`
 		Telegram struct {
@@ -297,14 +292,13 @@ func handleBindChat(ctx context.Context, cfg config, args []string) {
 
 func handleMonitor(command string, cfg config, client *canvas.Client, logger *slog.Logger) {
 	n := buildNotifier(context.Background(), cfg, logger)
-	s := buildSummarizer(cfg)
 
 	interval, err := time.ParseDuration(cfg.Monitor.PollInterval)
 	if err != nil {
 		exitErr(fmt.Errorf("invalid monitor.poll_interval: %w", err))
 	}
 
-	m := monitor.New(client, n, s, monitor.Config{
+	m := monitor.New(client, n, nil, monitor.Config{
 		PollInterval:   interval,
 		CourseFilter:   cfg.Monitor.Courses,
 		SummarizeNew:   cfg.Monitor.SummarizeNew,
@@ -358,14 +352,6 @@ func buildNotifier(ctx context.Context, cfg config, logger *slog.Logger) notifie
 		exitErr(fmt.Errorf("unsupported notifier provider: %s", cfg.Notifier.Provider))
 		return nil
 	}
-}
-
-func buildSummarizer(cfg config) summarizer.Summarizer {
-	provider := strings.ToLower(strings.TrimSpace(cfg.Summarizer.Provider))
-	if provider == "gemini" && strings.TrimSpace(cfg.Summarizer.GeminiAPIKey) != "" {
-		return summarizer.NewGemini(cfg.Summarizer.GeminiAPIKey)
-	}
-	return nil
 }
 
 func resolveTelegramChatID(ctx context.Context, cfg config) (string, error) {
@@ -488,12 +474,6 @@ func applyEnvOverrides(cfg *config) {
 	if v := strings.TrimSpace(os.Getenv("CANVAS_TOKEN")); v != "" {
 		cfg.Canvas.Token = v
 	}
-	if v := strings.TrimSpace(os.Getenv("GEMINI_API_KEY")); v != "" {
-		cfg.Summarizer.GeminiAPIKey = v
-		if cfg.Summarizer.Provider == "" {
-			cfg.Summarizer.Provider = "gemini"
-		}
-	}
 	if v := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")); v != "" {
 		cfg.Notifier.Telegram.BotToken = v
 		cfg.Notifier.Provider = "telegram"
@@ -580,9 +560,6 @@ func printConfig(cfg config) {
 	masked := cfg
 	if masked.Canvas.Token != "" {
 		masked.Canvas.Token = maskSecret(masked.Canvas.Token)
-	}
-	if masked.Summarizer.GeminiAPIKey != "" {
-		masked.Summarizer.GeminiAPIKey = maskSecret(masked.Summarizer.GeminiAPIKey)
 	}
 	if masked.Notifier.Telegram.BotToken != "" {
 		masked.Notifier.Telegram.BotToken = maskSecret(masked.Notifier.Telegram.BotToken)

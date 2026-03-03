@@ -1,0 +1,13 @@
+{
+  "name": "lx-agent",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "admin:backend": "bun run --filter @lx/admin-backend dev",
+    "admin:frontend": "bun run --filter @lx/admin-frontend dev",
+    "admin:build": "bun run --filter @lx/admin-backend build && bun run --filter @lx/admin-frontend build",
+    "admin:typecheck": "bun run --filter @lx/admin-backend typecheck && bun run --filter @lx/admin-frontend typecheck"
+  }
+}

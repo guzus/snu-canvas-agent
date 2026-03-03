@@ -2,3 +2,8 @@
 lx-state.json
 config.yaml
 !config.yaml.example
+node_modules/
+apps/admin-frontend/dist/
+apps/admin-backend/dist/
+apps/admin-backend/data/codex_account.json
+bun.lockb

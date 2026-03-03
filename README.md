@@ -1,191 +1,121 @@
 # lx-agent
 
-Canvas LMS (Learning X) monitoring agent written in Go. Watches your courses for new files, assignments, announcements, and upcoming deadlines — then summarizes and notifies you.
+Canvas LMS (Learning X) monitoring agent in Go, with Telegram bot controls and a Bun + TypeScript admin dashboard for ChatGPT/Codex account linking.
 
-Built for [서울대 Learning X](https://learningx.snu.ac.kr) but works with any Canvas LMS instance.
+Built for [서울대 Learning X](https://learningx.snu.ac.kr), compatible with Canvas LMS APIs.
 
 ## Features
 
-- 📄 **New file detection** — alerts when lecture materials are uploaded
-- 📝 **New assignment tracking** — notifies on new assignments with due dates
-- 📢 **Announcement monitoring** — catches new course announcements
-- ⏰ **Deadline alerts** — configurable D-3, D-1, D-Day reminders
-- 🤖 **Auto-summarization** — summarizes new content via Gemini AI
-- 📱 **Telegram notifications** — push alerts to your phone
-- 🔌 **Extensible** — pluggable notifier and summarizer interfaces
+- New file / assignment / announcement monitoring
+- Deadline alerts (`D-3`, `D-1`, `D-Day`)
+- Telegram bot commands for course info
+- Interactive course selectors in Telegram for commands that need `course_id`
+- Per-chat language setting (`ko` default, switchable to `en` via `/settings`)
+- Canvas token ↔ Telegram chat binding in Postgres
+- Admin dashboard (TypeScript + Bun): ChatGPT OAuth login + Codex model selection
 
-## Quick Start
+## Quick Start (Agent)
 
-### 1. Get your Canvas API token
-
-Go to your Canvas LMS → Account → Settings → New Access Token
-
-### 2. Install
+1. Get a Canvas API token (`Account -> Settings -> New Access Token`).
+2. Create config:
 
 ```bash
-go install github.com/mgnlia/lx-agent/cmd/lx-agent@latest
+cp config.yaml.example config.yaml
 ```
 
-Or build from source:
-
-```bash
-git clone https://github.com/mgnlia/lx-agent.git
-cd lx-agent
-go build -o lx-agent ./cmd/lx-agent/
-```
-
-### 3. Configure
-
-```bash
-cp config.yaml my-config.yaml
-# Edit my-config.yaml with your tokens
-```
-
-Or use environment variables:
-
-```bash
-export CANVAS_URL=learningx.snu.ac.kr
-export CANVAS_TOKEN=your-canvas-api-token
-export DATABASE_URL=your-postgres-url      # optional, for token->chat binding
-export GEMINI_API_KEY=your-gemini-key        # optional, for summarization
-export TELEGRAM_BOT_TOKEN=your-bot-token     # optional, for telegram alerts
-export TELEGRAM_CHAT_ID=your-chat-id
-```
-
-### 4. Run
-
-```bash
-# List your courses
-lx-agent courses
-
-# List upcoming assignments
-lx-agent assignments
-
-# List recent files
-lx-agent files
-
-# Run a single check
-lx-agent once
-
-# Start monitoring loop (polls every 10 minutes)
-lx-agent run
-
-# Start Telegram command bot only
-lx-agent bot
-
-# Run monitor + Telegram command bot together
-lx-agent serve
-```
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `run` | Start monitoring loop |
-| `once` | Run a single check and exit |
-| `courses` | List enrolled courses |
-| `assignments [course-id]` | List upcoming assignments |
-| `files [course-id]` | List recent files |
-| `announcements` | List recent announcements |
-| `bind-chat [chat-id]` | Bind current `CANVAS_TOKEN` to Telegram `chat_id` in DB |
-| `bot` | Run Telegram command bot (responds to chat commands) |
-| `serve` | Run monitor loop + Telegram command bot |
-| `config` | Show current configuration |
-
-### Telegram Bot Commands
-
-- `/status`
-- `/settings` (default language is Korean; switch to English)
-- `/courses [keyword]`
-- `/assignments` (interactive course selector)
-- `/upcoming [days] [limit]`
-- `/announcements [limit]`
-- `/files` (interactive course selector)
-- `/bind`
-
-## Configuration
+3. Fill required values:
 
 ```yaml
 canvas:
   url: "learningx.snu.ac.kr"
-  token: "your-api-token"
-
-monitor:
-  poll_interval: "10m"
-  summarize_new: true
-  deadline_alerts: [3, 1, 0]
-  state_path: "lx-state.json"
-  # courses: [12345]  # filter specific courses
-
-summarizer:
-  provider: "gemini"
-  gemini_api_key: "your-key"
+  token: "..."
 
 notifier:
-  provider: "telegram"  # or "stdout"
+  provider: "telegram"
   telegram:
-    bot_token: "your-bot-token"
-    chat_id: "your-chat-id"   # optional when database.url is set
+    bot_token: "..."
+    chat_id: ""   # optional if bound via DB
 
 database:
   url: "postgres://..."
 ```
 
+4. Run:
+
+```bash
+go run ./cmd/lx-agent serve
+```
+
+## CLI Commands
+
+- `courses`
+- `assignments [course-id]`
+- `files [course-id]`
+- `announcements`
+- `bind-chat [chat-id]`
+- `bot`
+- `serve`
+- `once`
+- `run`
+- `config`
+
+## Telegram Commands
+
+- `/status`
+- `/settings` (change language: Korean/English)
+- `/courses [keyword]`
+- `/assignments` (interactive course selector)
+- `/files` (interactive course selector)
+- `/upcoming [days] [limit]`
+- `/announcements [limit]`
+- `/bind`
+
+## Admin Dashboard (TypeScript + Bun)
+
+The admin stack is in `apps/admin-backend` and `apps/admin-frontend`.
+
+### Run locally
+
+```bash
+bun install
+bun run admin:backend
+bun run admin:frontend
+```
+
+- Backend: `http://localhost:8787`
+- Frontend: `http://localhost:5173`
+
+### What it does
+
+- `Login with ChatGPT` (OAuth flow for OpenAI Codex account)
+- Persist linked account JSON in `apps/admin-backend/data/codex_account.json`
+- Persist provider config in `apps/admin-backend/data/config.json`
+- Default model is `openai-codex/gpt-5.3-codex-spark`
+
+## Environment Variables
+
+- `CANVAS_URL`
+- `CANVAS_TOKEN`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+- `DATABASE_URL`
+- `MONITOR_COURSES` (comma-separated course ids)
+- `ADMIN_BACKEND_PORT` (optional; default `8787`)
+
 ## Architecture
 
-```
-lx-agent/
-├── cmd/lx-agent/main.go         # CLI entrypoint + config loading
-├── internal/
-│   ├── canvas/                   # Canvas LMS API client
-│   │   ├── client.go             # HTTP client, pagination, rate limiting
-│   │   ├── courses.go            # GET /courses
-│   │   ├── assignments.go        # GET /courses/:id/assignments
-│   │   ├── files.go              # GET /courses/:id/files, modules
-│   │   ├── announcements.go      # GET /announcements
-│   │   └── types.go              # Shared types
-│   ├── monitor/                  # Monitoring logic
-│   │   ├── monitor.go            # Poll loop + diff detection
-│   │   └── state.go              # Persistent state (seen IDs)
-│   ├── summarizer/               # Content summarization
-│   │   ├── summarizer.go         # Interface
-│   │   └── gemini.go             # Gemini implementation
-│   └── notifier/                 # Notification delivery
-│       ├── notifier.go           # Interface
-│       ├── telegram.go           # Telegram bot
-│       └── stdout.go             # Terminal output
-└── config.yaml
-```
+- `cmd/lx-agent/main.go`: CLI entrypoint and wiring
+- `internal/canvas/*`: Canvas API client
+- `internal/monitor/*`: monitor loop + state tracking
+- `internal/notifier/*`: stdout + Telegram notifier/bot
+- `internal/binding/*`: Postgres token/chat binding + language preferences
+- `apps/admin-backend/*`: Bun API for ChatGPT OAuth + Codex config
+- `apps/admin-frontend/*`: React UI for admin actions
 
-### Extending
+## Notes
 
-**Add a new notifier** (e.g., Discord):
-
-```go
-type DiscordNotifier struct { webhookURL string }
-
-func (d *DiscordNotifier) Send(ctx context.Context, message string) error {
-    // POST to Discord webhook
-}
-```
-
-**Add a new summarizer** (e.g., OpenAI):
-
-```go
-type OpenAISummarizer struct { apiKey string }
-
-func (o *OpenAISummarizer) SummarizeText(ctx context.Context, title, text string) (string, error) {
-    // Call OpenAI API
-}
-```
-
-## Canvas API
-
-lx-agent uses the [Canvas LMS REST API](https://canvas.instructure.com/doc/api/):
-
-- Authentication: Bearer token
-- Pagination: Link header (`rel="next"`)
-- Rate limiting: auto-retry on 429
+- Gemini integration has been removed from this repository.
+- Course filtering can be fixed to a term or subset using `monitor.courses` or `MONITOR_COURSES`.
 
 ## License
 

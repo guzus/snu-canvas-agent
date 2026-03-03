@@ -5,14 +5,10 @@ canvas:
 
 monitor:
   poll_interval: "10m"               # How often to check for updates
-  summarize_new: true                # Auto-summarize new files
+  summarize_new: false               # Reserved (no built-in summarizer provider)
   deadline_alerts: [3, 1, 0]         # Alert N days before due date
   state_path: "lx-state.json"        # State file for tracking seen items
   # courses: [12345, 67890]          # Filter specific course IDs (empty = all)
-
-summarizer:
-  provider: "gemini"                 # gemini | (extensible)
-  gemini_api_key: ""                 # Gemini API key
 
 notifier:
   provider: "stdout"                 # stdout | telegram | (extensible)

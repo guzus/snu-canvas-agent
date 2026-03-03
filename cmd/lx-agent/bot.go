@@ -99,14 +99,13 @@ func handleServe(cfg config, client *canvas.Client, logger *slog.Logger) {
 
 func runMonitorService(ctx context.Context, cfg config, client *canvas.Client, logger *slog.Logger) error {
 	n := buildNotifier(ctx, cfg, logger)
-	s := buildSummarizer(cfg)
 
 	interval, err := time.ParseDuration(cfg.Monitor.PollInterval)
 	if err != nil {
 		return fmt.Errorf("invalid monitor.poll_interval: %w", err)
 	}
 
-	m := monitor.New(client, n, s, monitor.Config{
+	m := monitor.New(client, n, nil, monitor.Config{
 		PollInterval:   interval,
 		CourseFilter:   cfg.Monitor.Courses,
 		SummarizeNew:   cfg.Monitor.SummarizeNew,

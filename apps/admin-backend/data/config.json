@@ -1,0 +1,8 @@
+{
+  "provider": "openai-codex",
+  "defaultModel": "openai-codex/gpt-5.3-codex-spark",
+  "codex": {
+    "enabled": false,
+    "authPath": "apps/admin-backend/data/codex_account.json"
+  }
+}
