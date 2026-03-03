@@ -13,4 +13,4 @@ RUN adduser -D -u 10001 appuser
 COPY --from=builder /out/lx-agent /app/lx-agent
 USER appuser
 
-CMD ["./lx-agent", "run"]
+CMD ["./lx-agent", "serve"]

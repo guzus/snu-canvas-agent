@@ -107,6 +107,10 @@ func main() {
 		handleFiles(ctx, client, cmdArgs)
 	case "announcements":
 		handleAnnouncements(ctx, client)
+	case "bot":
+		handleBot(cfg, client, logger)
+	case "serve":
+		handleServe(cfg, client, logger)
 	case "once", "run":
 		handleMonitor(cmd, cfg, client, logger)
 	default:
@@ -611,6 +615,8 @@ Commands:
   files [course-id]
   announcements
   bind-chat [chat-id]
+  bot
+  serve
   once
   run
   config`)

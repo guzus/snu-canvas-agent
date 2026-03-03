@@ -69,6 +69,12 @@ lx-agent once
 
 # Start monitoring loop (polls every 10 minutes)
 lx-agent run
+
+# Start Telegram command bot only
+lx-agent bot
+
+# Run monitor + Telegram command bot together
+lx-agent serve
 ```
 
 ## Commands
@@ -82,7 +88,19 @@ lx-agent run
 | `files [course-id]` | List recent files |
 | `announcements` | List recent announcements |
 | `bind-chat [chat-id]` | Bind current `CANVAS_TOKEN` to Telegram `chat_id` in DB |
+| `bot` | Run Telegram command bot (responds to chat commands) |
+| `serve` | Run monitor loop + Telegram command bot |
 | `config` | Show current configuration |
+
+### Telegram Bot Commands
+
+- `/status`
+- `/courses [keyword]`
+- `/assignments <course_id> [limit]`
+- `/upcoming [days] [limit]`
+- `/announcements [limit]`
+- `/files <course_id> [limit]`
+- `/bind`
 
 ## Configuration
 
