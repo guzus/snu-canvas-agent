@@ -3,12 +3,12 @@ package canvas
 import "time"
 
 type Course struct {
-	ID              int       `json:"id"`
-	Name            string    `json:"name"`
-	CourseCode      string    `json:"course_code"`
-	EnrollmentState string    `json:"enrollment_term_id,omitempty"`
-	StartAt         time.Time `json:"start_at,omitempty"`
-	EndAt           time.Time `json:"end_at,omitempty"`
+	ID               int        `json:"id"`
+	Name             string     `json:"name"`
+	CourseCode       string     `json:"course_code"`
+	EnrollmentTermID int        `json:"enrollment_term_id"`
+	StartAt          *time.Time `json:"start_at,omitempty"`
+	EndAt            *time.Time `json:"end_at,omitempty"`
 }
 
 type Assignment struct {

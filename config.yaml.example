@@ -18,4 +18,7 @@ notifier:
   provider: "stdout"                 # stdout | telegram | (extensible)
   telegram:
     bot_token: ""                    # Telegram bot token from @BotFather
-    chat_id: ""                      # Your Telegram chat ID
+    chat_id: ""                      # Optional: if empty, lookup from database by canvas token
+
+database:
+  url: ""                            # Optional: Postgres URL for canvas-token -> chat-id binding

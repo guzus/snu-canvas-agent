@@ -46,6 +46,7 @@ Or use environment variables:
 ```bash
 export CANVAS_URL=learningx.snu.ac.kr
 export CANVAS_TOKEN=your-canvas-api-token
+export DATABASE_URL=your-postgres-url      # optional, for token->chat binding
 export GEMINI_API_KEY=your-gemini-key        # optional, for summarization
 export TELEGRAM_BOT_TOKEN=your-bot-token     # optional, for telegram alerts
 export TELEGRAM_CHAT_ID=your-chat-id
@@ -80,6 +81,7 @@ lx-agent run
 | `assignments [course-id]` | List upcoming assignments |
 | `files [course-id]` | List recent files |
 | `announcements` | List recent announcements |
+| `bind-chat [chat-id]` | Bind current `CANVAS_TOKEN` to Telegram `chat_id` in DB |
 | `config` | Show current configuration |
 
 ## Configuration
@@ -104,7 +106,10 @@ notifier:
   provider: "telegram"  # or "stdout"
   telegram:
     bot_token: "your-bot-token"
-    chat_id: "your-chat-id"
+    chat_id: "your-chat-id"   # optional when database.url is set
+
+database:
+  url: "postgres://..."
 ```
 
 ## Architecture
