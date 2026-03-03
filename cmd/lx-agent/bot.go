@@ -841,6 +841,54 @@ func filterCoursesByIDs(courses []canvas.Course, ids []int) []canvas.Course {
 	return out
 }
 
+func currentSemesterKeyKST(now time.Time) string {
+	kst := now.In(time.FixedZone("KST", 9*3600))
+	semester := 1
+	if int(kst.Month()) >= 8 {
+		semester = 2
+	}
+	return fmt.Sprintf("%04d-%d", kst.Year(), semester)
+}
+
+func courseMatchesSemester(course canvas.Course, semesterKey string) bool {
+	targets := []string{
+		strings.ToLower(course.Name),
+		strings.ToLower(course.CourseCode),
+	}
+	patterns := []string{
+		strings.ToLower(semesterKey),
+		strings.ToLower(strings.ReplaceAll(semesterKey, "-", " ")),
+		strings.ToLower(strings.ReplaceAll(semesterKey, "-", "_")),
+	}
+	for _, t := range targets {
+		for _, p := range patterns {
+			if p != "" && strings.Contains(t, p) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func filterCoursesBySemester(courses []canvas.Course, semesterKey string) []canvas.Course {
+	var out []canvas.Course
+	for _, c := range courses {
+		if courseMatchesSemester(c, semesterKey) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func defaultSemesterCourses(courses []canvas.Course) ([]canvas.Course, string) {
+	semesterKey := currentSemesterKeyKST(time.Now())
+	filtered := filterCoursesBySemester(courses, semesterKey)
+	if len(filtered) == 0 {
+		return courses, semesterKey
+	}
+	return filtered, semesterKey
+}
+
 func availableCourses(ctx context.Context, cfg config, client *canvas.Client) ([]canvas.Course, error) {
 	courses, err := client.GetCourses(ctx)
 	if err != nil {
@@ -855,12 +903,18 @@ func monitoredCourses(ctx context.Context, cfg config, client *canvas.Client, ch
 		return nil, err
 	}
 	if strings.TrimSpace(cfg.Database.URL) == "" || chatID == "" {
-		return courses, nil
+		def, _ := defaultSemesterCourses(courses)
+		return def, nil
 	}
 
 	subIDs, err := listChatCourseIDs(ctx, cfg, chatID)
-	if err != nil || len(subIDs) == 0 {
-		return courses, nil
+	if err != nil {
+		def, _ := defaultSemesterCourses(courses)
+		return def, nil
+	}
+	if len(subIDs) == 0 {
+		def, _ := defaultSemesterCourses(courses)
+		return def, nil
 	}
 	return filterCoursesByIDs(courses, subIDs), nil
 }
@@ -875,7 +929,25 @@ func cmdListening(ctx context.Context, cfg config, client *canvas.Client, chatID
 		return msg(lang, "오류: ", "Error: ") + err.Error()
 	}
 	if len(ids) == 0 {
-		return msg(lang, "구독 중인 강의가 없습니다. /listen 으로 추가하세요.", "No subscribed courses. Add one with /listen.")
+		if client == nil {
+			return msg(lang, "기본 구독 학기를 확인할 수 없습니다. /listen 으로 추가하세요.", "Cannot resolve default semester courses. Add one with /listen.")
+		}
+		courses, err := availableCourses(ctx, cfg, client)
+		if err != nil {
+			return msg(lang, "오류: ", "Error: ") + err.Error()
+		}
+		defaultCourses, semesterKey := defaultSemesterCourses(courses)
+		lines := []string{
+			msg(
+				lang,
+				fmt.Sprintf("명시적 구독이 없어 %s 학기 강의를 기본 구독으로 사용합니다.", semesterKey),
+				fmt.Sprintf("No explicit subscriptions; using %s semester courses by default.", semesterKey),
+			),
+		}
+		for _, c := range defaultCourses {
+			lines = append(lines, fmt.Sprintf("- %d | %s", c.ID, c.Name))
+		}
+		return trimForTelegram(strings.Join(lines, "\n"))
 	}
 
 	if !hasCanvasConfig(cfg) {

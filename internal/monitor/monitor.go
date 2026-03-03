@@ -143,6 +143,54 @@ func applyCourseFilter(courses []canvas.Course, ids []int) []canvas.Course {
 	return filtered
 }
 
+func currentSemesterKeyKST(now time.Time) string {
+	kst := now.In(time.FixedZone("KST", 9*3600))
+	semester := 1
+	if int(kst.Month()) >= 8 {
+		semester = 2
+	}
+	return fmt.Sprintf("%04d-%d", kst.Year(), semester)
+}
+
+func courseMatchesSemester(course canvas.Course, semesterKey string) bool {
+	targets := []string{
+		strings.ToLower(course.Name),
+		strings.ToLower(course.CourseCode),
+	}
+	patterns := []string{
+		strings.ToLower(semesterKey),
+		strings.ToLower(strings.ReplaceAll(semesterKey, "-", " ")),
+		strings.ToLower(strings.ReplaceAll(semesterKey, "-", "_")),
+	}
+	for _, t := range targets {
+		for _, p := range patterns {
+			if p != "" && strings.Contains(t, p) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func filterCoursesBySemester(courses []canvas.Course, semesterKey string) []canvas.Course {
+	var out []canvas.Course
+	for _, c := range courses {
+		if courseMatchesSemester(c, semesterKey) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func defaultSemesterCourses(courses []canvas.Course) ([]canvas.Course, string) {
+	semesterKey := currentSemesterKeyKST(time.Now())
+	filtered := filterCoursesBySemester(courses, semesterKey)
+	if len(filtered) == 0 {
+		return courses, semesterKey
+	}
+	return filtered, semesterKey
+}
+
 func parseContextCourseID(contextCode string) int {
 	if !strings.HasPrefix(contextCode, "course_") {
 		return 0
@@ -164,13 +212,20 @@ func (m *Monitor) check(ctx context.Context) error {
 
 	courses = applyCourseFilter(courses, m.config.CourseFilter)
 
+	hasExplicitCourseScope := len(m.config.CourseFilter) > 0
 	if m.store != nil && m.chatID != "" {
 		subscribedCourseIDs, err := m.store.ListChatCourses(ctx, m.chatID)
 		if err != nil {
 			m.logger.Warn("load subscribed chat courses failed", "chat_id", m.chatID, "err", err)
 		} else if len(subscribedCourseIDs) > 0 {
 			courses = applyCourseFilter(courses, subscribedCourseIDs)
+			hasExplicitCourseScope = true
 		}
+	}
+	if !hasExplicitCourseScope {
+		filtered, semesterKey := defaultSemesterCourses(courses)
+		courses = filtered
+		m.logger.Info("using default semester scope", "semester", semesterKey, "course_count", len(courses))
 	}
 
 	m.logger.Info("checking courses", "count", len(courses))

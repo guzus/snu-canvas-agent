@@ -120,6 +120,7 @@ bun run admin:frontend
 - `serve` can run without Canvas config (Telegram bot only). Canvas commands will return a not-configured message.
 - Chat course subscriptions are persisted in Postgres and used by monitor filtering when available.
 - Sent alerts are persisted with metadata/dedupe keys in Postgres to prevent re-sending duplicates.
+- If no explicit subscriptions exist for a chat, the bot/monitor defaults to current semester courses (e.g., `2026-1` in spring 2026 KST).
 
 ## License
 
