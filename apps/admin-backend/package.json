@@ -9,7 +9,11 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@types/pg": "^8.18.0",
     "bun-types": "^1.2.17",
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "pg": "^8.19.0"
   }
 }

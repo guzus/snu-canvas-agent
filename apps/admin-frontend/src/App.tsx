@@ -9,11 +9,21 @@ type Config = {
   };
 };
 
+type ChatRow = {
+  chat_id: string;
+  lang: string;
+  bindings: number;
+  subscriptions: number;
+  sent_alerts: number;
+  last_sent_at: string | null;
+};
+
 const apiBase = import.meta.env.VITE_ADMIN_BACKEND_URL || window.location.origin;
 
 export function App() {
   const [config, setConfig] = useState<Config | null>(null);
   const [linked, setLinked] = useState(false);
+  const [chats, setChats] = useState<ChatRow[]>([]);
   const [oauthUrl, setOauthUrl] = useState("");
   const [redirectUrl, setRedirectUrl] = useState("");
   const [message, setMessage] = useState("");
@@ -28,10 +38,19 @@ export function App() {
   );
 
   async function load() {
-    const res = await fetch(`${apiBase}/api/config`);
-    const data = (await res.json()) as { config: Config; linked: boolean };
-    setConfig(data.config);
-    setLinked(Boolean(data.linked));
+    const [cfgRes, chatsRes] = await Promise.all([
+      fetch(`${apiBase}/api/config`),
+      fetch(`${apiBase}/api/chat-ids`),
+    ]);
+    const cfg = (await cfgRes.json()) as { config: Config; linked: boolean };
+    setConfig(cfg.config);
+    setLinked(Boolean(cfg.linked));
+    if (chatsRes.ok) {
+      const chatsPayload = (await chatsRes.json()) as { chats?: ChatRow[] };
+      setChats(Array.isArray(chatsPayload.chats) ? chatsPayload.chats : []);
+    } else {
+      setChats([]);
+    }
   }
 
   useEffect(() => {
@@ -153,6 +172,40 @@ export function App() {
         </label>
       </section>
 
+      <section style={card}>
+        <h2 style={h2}>Telegram Chats</h2>
+        {chats.length === 0 ? (
+          <p style={{ margin: 0, color: "#666" }}>No chat IDs found.</p>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={table}>
+              <thead>
+                <tr>
+                  <th style={th}>Chat ID</th>
+                  <th style={th}>Lang</th>
+                  <th style={th}>Bindings</th>
+                  <th style={th}>Subscriptions</th>
+                  <th style={th}>Sent Alerts</th>
+                  <th style={th}>Last Alert</th>
+                </tr>
+              </thead>
+              <tbody>
+                {chats.map((c) => (
+                  <tr key={c.chat_id}>
+                    <td style={td}>{c.chat_id}</td>
+                    <td style={td}>{c.lang}</td>
+                    <td style={td}>{c.bindings}</td>
+                    <td style={td}>{c.subscriptions}</td>
+                    <td style={td}>{c.sent_alerts}</td>
+                    <td style={td}>{c.last_sent_at ? new Date(c.last_sent_at).toLocaleString() : "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
       {message ? <p style={{ color: "#0b6", whiteSpace: "pre-wrap" }}>{message}</p> : null}
     </div>
   );
@@ -200,4 +253,23 @@ const textarea: React.CSSProperties = {
   borderRadius: 8,
   border: "1px solid #ccc",
   padding: "0.5rem",
+};
+
+const table: React.CSSProperties = {
+  width: "100%",
+  borderCollapse: "collapse",
+  fontSize: 14,
+};
+
+const th: React.CSSProperties = {
+  textAlign: "left",
+  borderBottom: "1px solid #ddd",
+  padding: "0.5rem",
+  whiteSpace: "nowrap",
+};
+
+const td: React.CSSProperties = {
+  borderBottom: "1px solid #eee",
+  padding: "0.5rem",
+  whiteSpace: "nowrap",
 };

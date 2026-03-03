@@ -2,6 +2,7 @@ import { hasCodexAccount, loadConfig, saveCodexAccount, saveConfig } from "./con
 import { exchangeCodexCode, startCodexOAuthFlow } from "./oauth";
 import { stat } from "node:fs/promises";
 import { extname, resolve } from "node:path";
+import { Pool } from "pg";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -34,6 +35,117 @@ async function parseJson(req: Request): Promise<JsonRecord> {
 
 const port = Number(process.env.PORT || process.env.ADMIN_BACKEND_PORT || 8787);
 const frontendDist = resolve(process.cwd(), "apps/admin-frontend/dist");
+const databaseURL = String(process.env.DATABASE_URL || "").trim();
+const pool = databaseURL ? new Pool({ connectionString: databaseURL }) : null;
+let schemaReady = false;
+let schemaInitPromise: Promise<void> | null = null;
+
+type ChatRow = {
+  chat_id: string;
+  lang: string;
+  bindings: number;
+  subscriptions: number;
+  sent_alerts: number;
+  last_sent_at: string | null;
+};
+
+async function ensureChatSchema(): Promise<void> {
+  if (!pool || schemaReady) return;
+  if (schemaInitPromise) return schemaInitPromise;
+
+  schemaInitPromise = (async () => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(781234567890123)");
+      await client.query(`
+CREATE TABLE IF NOT EXISTS telegram_bindings (
+  canvas_api_key TEXT PRIMARY KEY,
+  chat_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)`);
+      await client.query(`
+CREATE TABLE IF NOT EXISTS telegram_chat_settings (
+  chat_id TEXT PRIMARY KEY,
+  lang TEXT NOT NULL DEFAULT 'ko',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)`);
+      await client.query(`
+CREATE TABLE IF NOT EXISTS telegram_chat_courses (
+  chat_id TEXT NOT NULL,
+  course_id INTEGER NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (chat_id, course_id)
+)`);
+      await client.query(`
+CREATE TABLE IF NOT EXISTS telegram_sent_alerts (
+  chat_id TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  alert_type TEXT NOT NULL,
+  course_id INTEGER NULL,
+  entity_id BIGINT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (chat_id, dedupe_key)
+)`);
+      await client.query("COMMIT");
+      schemaReady = true;
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+      schemaInitPromise = null;
+    }
+  })();
+
+  return schemaInitPromise;
+}
+
+async function listChats(): Promise<ChatRow[]> {
+  if (!pool) return [];
+  await ensureChatSchema();
+
+  const result = await pool.query<ChatRow>(`
+SELECT
+  c.chat_id,
+  COALESCE(s.lang, 'ko') AS lang,
+  COALESCE(b.bindings, 0) AS bindings,
+  COALESCE(cc.subscriptions, 0) AS subscriptions,
+  COALESCE(sa.sent_alerts, 0) AS sent_alerts,
+  sa.last_sent_at
+FROM (
+  SELECT chat_id FROM telegram_bindings
+  UNION
+  SELECT chat_id FROM telegram_chat_settings
+  UNION
+  SELECT chat_id FROM telegram_chat_courses
+  UNION
+  SELECT chat_id FROM telegram_sent_alerts
+) c
+LEFT JOIN telegram_chat_settings s ON s.chat_id = c.chat_id
+LEFT JOIN (
+  SELECT chat_id, COUNT(*)::int AS bindings
+  FROM telegram_bindings
+  GROUP BY chat_id
+) b ON b.chat_id = c.chat_id
+LEFT JOIN (
+  SELECT chat_id, COUNT(*)::int AS subscriptions
+  FROM telegram_chat_courses
+  GROUP BY chat_id
+) cc ON cc.chat_id = c.chat_id
+LEFT JOIN (
+  SELECT chat_id, COUNT(*)::int AS sent_alerts, MAX(sent_at)::text AS last_sent_at
+  FROM telegram_sent_alerts
+  GROUP BY chat_id
+) sa ON sa.chat_id = c.chat_id
+ORDER BY c.chat_id
+`);
+  return result.rows;
+}
 
 function contentTypeFor(pathname: string): string | undefined {
   switch (extname(pathname).toLowerCase()) {
@@ -109,6 +221,19 @@ Bun.serve({
       const config = await loadConfig();
       const linked = await hasCodexAccount();
       return json({ config, linked }, {}, origin);
+    }
+
+    if (url.pathname === "/api/chat-ids" && req.method === "GET") {
+      try {
+        const chats = await listChats();
+        return json({ ok: true, chats, databaseConnected: Boolean(pool) }, {}, origin);
+      } catch (err) {
+        return json(
+          { ok: false, error: err instanceof Error ? err.message : String(err), databaseConnected: Boolean(pool) },
+          { status: 500 },
+          origin
+        );
+      }
     }
 
     if (url.pathname === "/api/config" && req.method === "PUT") {
