@@ -5,20 +5,33 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/mgnlia/lx-agent/internal/binding"
 	"github.com/mgnlia/lx-agent/internal/canvas"
 	"github.com/mgnlia/lx-agent/internal/notifier"
 	"github.com/mgnlia/lx-agent/internal/summarizer"
 )
 
 type Config struct {
-	PollInterval  time.Duration
-	CourseFilter  []int // empty = all courses
-	SummarizeNew  bool
+	PollInterval   time.Duration
+	CourseFilter   []int // empty = all courses
+	SummarizeNew   bool
 	DeadlineAlerts []int // days before due (e.g., [3, 1, 0])
-	StatePath     string
+	StatePath      string
+	DatabaseURL    string
+	ChatID         string
+}
+
+type Alert struct {
+	Type      string
+	CourseID  int
+	EntityID  *int64
+	DedupeKey string
+	Message   string
+	Metadata  map[string]any
 }
 
 type Monitor struct {
@@ -28,6 +41,8 @@ type Monitor struct {
 	config     Config
 	state      *State
 	logger     *slog.Logger
+	store      *binding.Store
+	chatID     string
 }
 
 func New(
@@ -45,7 +60,22 @@ func New(
 	}
 
 	state := NewState(cfg.StatePath)
-	state.Load()
+	if err := state.Load(); err != nil {
+		logger.Warn("load state failed", "err", err)
+	}
+
+	var store *binding.Store
+	if strings.TrimSpace(cfg.DatabaseURL) != "" && strings.TrimSpace(cfg.ChatID) != "" {
+		s, err := binding.New(cfg.DatabaseURL)
+		if err != nil {
+			logger.Warn("init monitor binding store failed", "err", err)
+		} else if err := s.EnsureSchema(context.Background()); err != nil {
+			logger.Warn("ensure monitor binding schema failed", "err", err)
+			_ = s.Close()
+		} else {
+			store = s
+		}
+	}
 
 	return &Monitor{
 		client:     client,
@@ -54,10 +84,20 @@ func New(
 		config:     cfg,
 		state:      state,
 		logger:     logger,
+		store:      store,
+		chatID:     cfg.ChatID,
+	}
+}
+
+func (m *Monitor) closeStore() {
+	if m.store != nil {
+		_ = m.store.Close()
+		m.store = nil
 	}
 }
 
 func (m *Monitor) Run(ctx context.Context) error {
+	defer m.closeStore()
 	m.logger.Info("starting monitor", "interval", m.config.PollInterval)
 
 	// Initial check
@@ -82,7 +122,36 @@ func (m *Monitor) Run(ctx context.Context) error {
 }
 
 func (m *Monitor) RunOnce(ctx context.Context) error {
+	defer m.closeStore()
 	return m.check(ctx)
+}
+
+func applyCourseFilter(courses []canvas.Course, ids []int) []canvas.Course {
+	if len(ids) == 0 {
+		return courses
+	}
+	filterSet := make(map[int]bool, len(ids))
+	for _, id := range ids {
+		filterSet[id] = true
+	}
+	var filtered []canvas.Course
+	for _, c := range courses {
+		if filterSet[c.ID] {
+			filtered = append(filtered, c)
+		}
+	}
+	return filtered
+}
+
+func parseContextCourseID(contextCode string) int {
+	if !strings.HasPrefix(contextCode, "course_") {
+		return 0
+	}
+	id, err := strconv.Atoi(strings.TrimPrefix(contextCode, "course_"))
+	if err != nil {
+		return 0
+	}
+	return id
 }
 
 func (m *Monitor) check(ctx context.Context) error {
@@ -93,49 +162,41 @@ func (m *Monitor) check(ctx context.Context) error {
 		return fmt.Errorf("get courses: %w", err)
 	}
 
-	// Filter courses if configured
-	if len(m.config.CourseFilter) > 0 {
-		filterSet := make(map[int]bool)
-		for _, id := range m.config.CourseFilter {
-			filterSet[id] = true
+	courses = applyCourseFilter(courses, m.config.CourseFilter)
+
+	if m.store != nil && m.chatID != "" {
+		subscribedCourseIDs, err := m.store.ListChatCourses(ctx, m.chatID)
+		if err != nil {
+			m.logger.Warn("load subscribed chat courses failed", "chat_id", m.chatID, "err", err)
+		} else if len(subscribedCourseIDs) > 0 {
+			courses = applyCourseFilter(courses, subscribedCourseIDs)
 		}
-		var filtered []canvas.Course
-		for _, c := range courses {
-			if filterSet[c.ID] {
-				filtered = append(filtered, c)
-			}
-		}
-		courses = filtered
 	}
 
 	m.logger.Info("checking courses", "count", len(courses))
 
-	var messages []string
+	var alerts []Alert
 
 	for _, course := range courses {
-		// Check new files
 		newFiles, err := m.checkFiles(ctx, course)
 		if err != nil {
 			m.logger.Error("check files failed", "course", course.Name, "err", err)
 		}
-		messages = append(messages, newFiles...)
+		alerts = append(alerts, newFiles...)
 
-		// Check new assignments
 		newAssignments, err := m.checkAssignments(ctx, course)
 		if err != nil {
 			m.logger.Error("check assignments failed", "course", course.Name, "err", err)
 		}
-		messages = append(messages, newAssignments...)
+		alerts = append(alerts, newAssignments...)
 
-		// Check deadlines
 		deadlines, err := m.checkDeadlines(ctx, course)
 		if err != nil {
 			m.logger.Error("check deadlines failed", "course", course.Name, "err", err)
 		}
-		messages = append(messages, deadlines...)
+		alerts = append(alerts, deadlines...)
 	}
 
-	// Check announcements (all courses at once)
 	courseIDs := make([]int, len(courses))
 	for i, c := range courses {
 		courseIDs[i] = c.ID
@@ -145,35 +206,64 @@ func (m *Monitor) check(ctx context.Context) error {
 		if err != nil {
 			m.logger.Error("check announcements failed", "err", err)
 		}
-		messages = append(messages, newAnnouncements...)
+		alerts = append(alerts, newAnnouncements...)
 	}
 
-	// Send notifications
-	for _, msg := range messages {
-		if err := m.notifier.Send(ctx, msg); err != nil {
-			m.logger.Error("notify failed", "err", err)
+	sentCount := 0
+	skippedDuplicates := 0
+	for _, alert := range alerts {
+		recordInserted := true
+		if m.store != nil && m.chatID != "" {
+			recordInserted, err = m.store.InsertSentAlertIfNew(ctx, m.chatID, binding.SentAlert{
+				DedupeKey: alert.DedupeKey,
+				AlertType: alert.Type,
+				CourseID:  intPtrIfNonZero(alert.CourseID),
+				EntityID:  alert.EntityID,
+				Metadata:  alert.Metadata,
+			})
+			if err != nil {
+				m.logger.Warn("sent-alert dedupe check failed; sending anyway", "err", err, "dedupe_key", alert.DedupeKey)
+				recordInserted = true
+			}
 		}
+		if !recordInserted {
+			skippedDuplicates++
+			continue
+		}
+
+		if err := m.notifier.Send(ctx, alert.Message); err != nil {
+			m.logger.Error("notify failed", "err", err)
+			if m.store != nil && m.chatID != "" {
+				if rmErr := m.store.DeleteSentAlert(ctx, m.chatID, alert.DedupeKey); rmErr != nil {
+					m.logger.Warn("rollback sent-alert marker failed", "err", rmErr, "dedupe_key", alert.DedupeKey)
+				}
+			}
+			continue
+		}
+		sentCount++
 	}
 
 	m.state.Data.LastCheck = time.Now()
-	m.state.Save()
+	if err := m.state.Save(); err != nil {
+		m.logger.Warn("save state failed", "err", err)
+	}
 
-	if len(messages) > 0 {
-		m.logger.Info("sent notifications", "count", len(messages))
+	if sentCount > 0 {
+		m.logger.Info("sent notifications", "count", sentCount, "skipped_duplicates", skippedDuplicates)
 	} else {
-		m.logger.Info("no updates")
+		m.logger.Info("no updates", "skipped_duplicates", skippedDuplicates)
 	}
 
 	return nil
 }
 
-func (m *Monitor) checkFiles(ctx context.Context, course canvas.Course) ([]string, error) {
+func (m *Monitor) checkFiles(ctx context.Context, course canvas.Course) ([]Alert, error) {
 	files, err := m.client.GetFiles(ctx, course.ID)
 	if err != nil {
 		return nil, err
 	}
 
-	var messages []string
+	var alerts []Alert
 	for _, f := range files {
 		if !m.state.IsFileNew(f.ID, f.Size) {
 			continue
@@ -192,19 +282,34 @@ func (m *Monitor) checkFiles(ctx context.Context, course canvas.Course) ([]strin
 			}
 		}
 
-		messages = append(messages, msg)
+		entityID := int64(f.ID)
+		alerts = append(alerts, Alert{
+			Type:      "file",
+			CourseID:  course.ID,
+			EntityID:  &entityID,
+			DedupeKey: fmt.Sprintf("file:%d:%d", f.ID, f.Size),
+			Message:   msg,
+			Metadata: map[string]any{
+				"course_id":    course.ID,
+				"course_name":  course.Name,
+				"file_id":      f.ID,
+				"file_name":    f.DisplayName,
+				"file_size":    f.Size,
+				"file_updated": f.UpdatedAt.UTC().Format(time.RFC3339),
+			},
+		})
 	}
 
-	return messages, nil
+	return alerts, nil
 }
 
-func (m *Monitor) checkAssignments(ctx context.Context, course canvas.Course) ([]string, error) {
+func (m *Monitor) checkAssignments(ctx context.Context, course canvas.Course) ([]Alert, error) {
 	assignments, err := m.client.GetAssignments(ctx, course.ID)
 	if err != nil {
 		return nil, err
 	}
 
-	var messages []string
+	var alerts []Alert
 	for _, a := range assignments {
 		if !m.state.IsAssignmentNew(a.ID) {
 			continue
@@ -212,27 +317,43 @@ func (m *Monitor) checkAssignments(ctx context.Context, course canvas.Course) ([
 		m.state.MarkAssignment(a.ID)
 
 		due := "마감일 없음"
+		dueAt := ""
 		if a.DueAt != nil {
 			due = a.DueAt.In(time.FixedZone("KST", 9*3600)).Format("2006-01-02 15:04 KST")
+			dueAt = a.DueAt.UTC().Format(time.RFC3339)
 		}
 
 		msg := fmt.Sprintf("📝 *새 과제*\n📚 %s\n📌 %s\n⏰ %s\n💯 %.0f점",
 			course.Name, a.Name, due, a.PointsPossible)
 
-		messages = append(messages, msg)
+		entityID := int64(a.ID)
+		alerts = append(alerts, Alert{
+			Type:      "assignment",
+			CourseID:  course.ID,
+			EntityID:  &entityID,
+			DedupeKey: fmt.Sprintf("assignment:%d", a.ID),
+			Message:   msg,
+			Metadata: map[string]any{
+				"course_id":     course.ID,
+				"course_name":   course.Name,
+				"assignment_id": a.ID,
+				"title":         a.Name,
+				"due_at":        dueAt,
+				"points":        a.PointsPossible,
+			},
+		})
 	}
 
-	return messages, nil
+	return alerts, nil
 }
 
-func (m *Monitor) checkDeadlines(ctx context.Context, course canvas.Course) ([]string, error) {
+func (m *Monitor) checkDeadlines(ctx context.Context, course canvas.Course) ([]Alert, error) {
 	assignments, err := m.client.GetAssignments(ctx, course.ID)
 	if err != nil {
 		return nil, err
 	}
 
-	now := time.Now()
-	var messages []string
+	var alerts []Alert
 
 	for _, a := range assignments {
 		if a.DueAt == nil || a.Submitted {
@@ -274,40 +395,62 @@ func (m *Monitor) checkDeadlines(ctx context.Context, course canvas.Course) ([]s
 					course.Name, a.Name, urgency,
 					kst.Format("2006-01-02 15:04 KST"))
 
-				_ = now
-				messages = append(messages, msg)
+				entityID := int64(a.ID)
+				alerts = append(alerts, Alert{
+					Type:      "deadline",
+					CourseID:  course.ID,
+					EntityID:  &entityID,
+					DedupeKey: fmt.Sprintf("deadline:%d:%s", a.ID, level),
+					Message:   msg,
+					Metadata: map[string]any{
+						"course_id":     course.ID,
+						"course_name":   course.Name,
+						"assignment_id": a.ID,
+						"title":         a.Name,
+						"due_at":        a.DueAt.UTC().Format(time.RFC3339),
+						"level":         level,
+						"days_left":     daysLeft,
+						"hours_left":    hoursLeft,
+					},
+				})
 				break
 			}
 		}
 	}
 
-	return messages, nil
+	return alerts, nil
 }
 
-func (m *Monitor) checkAnnouncements(ctx context.Context, courseIDs []int, courses []canvas.Course) ([]string, error) {
+func (m *Monitor) checkAnnouncements(ctx context.Context, courseIDs []int, courses []canvas.Course) ([]Alert, error) {
 	announcements, err := m.client.GetAnnouncements(ctx, courseIDs)
 	if err != nil {
 		return nil, err
 	}
 
-	courseMap := make(map[string]string)
+	courseNameMap := make(map[string]string)
+	courseIDMap := make(map[string]int)
 	for _, c := range courses {
-		courseMap[fmt.Sprintf("course_%d", c.ID)] = c.Name
+		key := fmt.Sprintf("course_%d", c.ID)
+		courseNameMap[key] = c.Name
+		courseIDMap[key] = c.ID
 	}
 
-	var messages []string
+	var alerts []Alert
 	for _, a := range announcements {
 		if !m.state.IsAnnouncementNew(a.ID) {
 			continue
 		}
 		m.state.MarkAnnouncement(a.ID)
 
-		courseName := courseMap[a.ContextCode]
+		courseName := courseNameMap[a.ContextCode]
 		if courseName == "" {
 			courseName = a.ContextCode
 		}
+		courseID := courseIDMap[a.ContextCode]
+		if courseID == 0 {
+			courseID = parseContextCourseID(a.ContextCode)
+		}
 
-		// Strip HTML tags from message
 		plainMsg := stripHTML(a.Message)
 		if len(plainMsg) > 500 {
 			plainMsg = plainMsg[:500] + "..."
@@ -323,10 +466,26 @@ func (m *Monitor) checkAnnouncements(ctx context.Context, courseIDs []int, cours
 			}
 		}
 
-		messages = append(messages, msg)
+		entityID := int64(a.ID)
+		alerts = append(alerts, Alert{
+			Type:      "announcement",
+			CourseID:  courseID,
+			EntityID:  &entityID,
+			DedupeKey: fmt.Sprintf("announcement:%d", a.ID),
+			Message:   msg,
+			Metadata: map[string]any{
+				"course_id":         courseID,
+				"course_name":       courseName,
+				"announcement_id":   a.ID,
+				"title":             a.Title,
+				"posted_at":         a.PostedAt.UTC().Format(time.RFC3339),
+				"context_code":      a.ContextCode,
+				"announcement_link": a.HTMLURL,
+			},
+		})
 	}
 
-	return messages, nil
+	return alerts, nil
 }
 
 func (m *Monitor) summarizeFile(ctx context.Context, f canvas.File) (string, error) {
@@ -348,6 +507,14 @@ func (m *Monitor) summarizeFile(ctx context.Context, f canvas.File) (string, err
 	}
 
 	return m.summarizer.SummarizeFile(ctx, f.DisplayName, data)
+}
+
+func intPtrIfNonZero(v int) *int {
+	if v == 0 {
+		return nil
+	}
+	x := v
+	return &x
 }
 
 var htmlTagRe = regexp.MustCompile(`<[^>]+>`)

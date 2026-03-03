@@ -111,6 +111,16 @@ func handleServe(cfg config, client *canvas.Client, logger *slog.Logger) {
 func runMonitorService(ctx context.Context, cfg config, client *canvas.Client, logger *slog.Logger) error {
 	n := buildNotifier(ctx, cfg, logger)
 
+	monitorChatID := ""
+	if strings.EqualFold(strings.TrimSpace(cfg.Notifier.Provider), "telegram") {
+		cid, err := resolveTelegramChatID(ctx, cfg)
+		if err != nil {
+			logger.Warn("resolve monitor chat id failed", "err", err)
+		} else {
+			monitorChatID = cid
+		}
+	}
+
 	interval, err := time.ParseDuration(cfg.Monitor.PollInterval)
 	if err != nil {
 		return fmt.Errorf("invalid monitor.poll_interval: %w", err)
@@ -122,6 +132,8 @@ func runMonitorService(ctx context.Context, cfg config, client *canvas.Client, l
 		SummarizeNew:   cfg.Monitor.SummarizeNew,
 		DeadlineAlerts: cfg.Monitor.DeadlineAlerts,
 		StatePath:      cfg.Monitor.StatePath,
+		DatabaseURL:    cfg.Database.URL,
+		ChatID:         monitorChatID,
 	}, logger)
 
 	return m.Run(ctx)
@@ -238,10 +250,16 @@ func handleTelegramCommand(ctx context.Context, cfg config, client *canvas.Clien
 		if len(cfg.Monitor.Courses) > 0 {
 			filter = strings.Trim(strings.Replace(fmt.Sprint(cfg.Monitor.Courses), " ", ",", -1), "[]")
 		}
-		if lang == "en" {
-			return botResponse{Text: fmt.Sprintf("chat_id=%s\nmonitor_courses=%s\npoll_interval=%s\nlang=%s", chatID, filter, cfg.Monitor.PollInterval, lang)}
+		subscriptions := "all"
+		if strings.TrimSpace(cfg.Database.URL) != "" {
+			if ids, err := listChatCourseIDs(ctx, cfg, chatID); err == nil && len(ids) > 0 {
+				subscriptions = strings.Trim(strings.Replace(fmt.Sprint(ids), " ", ",", -1), "[]")
+			}
 		}
-		return botResponse{Text: fmt.Sprintf("chat_id=%s\nmonitor_courses=%s\npoll_interval=%s\n언어=%s", chatID, filter, cfg.Monitor.PollInterval, lang)}
+		if lang == "en" {
+			return botResponse{Text: fmt.Sprintf("chat_id=%s\nmonitor_courses=%s\nsubscribed_courses=%s\npoll_interval=%s\nlang=%s", chatID, filter, subscriptions, cfg.Monitor.PollInterval, lang)}
+		}
+		return botResponse{Text: fmt.Sprintf("chat_id=%s\nmonitor_courses=%s\nsubscribed_courses=%s\npoll_interval=%s\n언어=%s", chatID, filter, subscriptions, cfg.Monitor.PollInterval, lang)}
 	case "/bind":
 		if strings.TrimSpace(cfg.Database.URL) == "" || strings.TrimSpace(cfg.Canvas.Token) == "" {
 			return botResponse{Text: msg(lang, "바인딩에는 DATABASE_URL과 config의 canvas.token이 필요합니다.", "Binding requires DATABASE_URL and canvas.token in config.")}
@@ -258,11 +276,31 @@ func handleTelegramCommand(ctx context.Context, cfg config, client *canvas.Clien
 			return botResponse{Text: msg(lang, "DB 바인딩 오류: ", "DB bind error: ") + err.Error()}
 		}
 		return botResponse{Text: msg(lang, "현재 채팅을 Canvas 토큰에 바인딩했습니다.", "Bound this chat to the current Canvas token.")}
+	case "/listening":
+		return botResponse{Text: cmdListening(ctx, cfg, client, chatID, lang)}
+	case "/listen":
+		if !hasCanvasConfig(cfg) {
+			return botResponse{Text: msg(lang, "Canvas가 설정되지 않았습니다. 관리자에서 연결 후 다시 시도하세요.", "Canvas is not configured. Connect it in admin first.")}
+		}
+		resp, err := cmdListenSelector(ctx, cfg, client, lang)
+		if err != nil {
+			return botResponse{Text: msg(lang, "오류: ", "Error: ") + err.Error()}
+		}
+		return resp
+	case "/unlisten":
+		if !hasCanvasConfig(cfg) {
+			return botResponse{Text: msg(lang, "Canvas가 설정되지 않았습니다. 관리자에서 연결 후 다시 시도하세요.", "Canvas is not configured. Connect it in admin first.")}
+		}
+		resp, err := cmdUnlistenSelector(ctx, cfg, client, chatID, lang)
+		if err != nil {
+			return botResponse{Text: msg(lang, "오류: ", "Error: ") + err.Error()}
+		}
+		return resp
 	case "/courses":
 		if !hasCanvasConfig(cfg) {
 			return botResponse{Text: msg(lang, "Canvas가 설정되지 않았습니다. 관리자에서 연결 후 다시 시도하세요.", "Canvas is not configured. Connect it in admin first.")}
 		}
-		return botResponse{Text: cmdCourses(ctx, cfg, client, args, lang)}
+		return botResponse{Text: cmdCourses(ctx, cfg, client, chatID, args, lang)}
 	case "/assignments":
 		if !hasCanvasConfig(cfg) {
 			return botResponse{Text: msg(lang, "Canvas가 설정되지 않았습니다. 관리자에서 연결 후 다시 시도하세요.", "Canvas is not configured. Connect it in admin first.")}
@@ -272,7 +310,7 @@ func handleTelegramCommand(ctx context.Context, cfg config, client *canvas.Clien
 				return botResponse{Text: msg(lang, "course_id 직접 입력은 더 이상 필요하지 않습니다. /assignments 를 눌러 강의를 선택하세요.", "Typing course_id is no longer needed. Use /assignments and pick a course.")}
 			}
 		}
-		resp, err := cmdAssignmentsSelector(ctx, cfg, client, 10, lang)
+		resp, err := cmdAssignmentsSelector(ctx, cfg, client, chatID, 10, lang)
 		if err != nil {
 			return botResponse{Text: msg(lang, "오류: ", "Error: ") + err.Error()}
 		}
@@ -281,12 +319,12 @@ func handleTelegramCommand(ctx context.Context, cfg config, client *canvas.Clien
 		if !hasCanvasConfig(cfg) {
 			return botResponse{Text: msg(lang, "Canvas가 설정되지 않았습니다. 관리자에서 연결 후 다시 시도하세요.", "Canvas is not configured. Connect it in admin first.")}
 		}
-		return botResponse{Text: cmdUpcoming(ctx, cfg, client, args, lang)}
+		return botResponse{Text: cmdUpcoming(ctx, cfg, client, chatID, args, lang)}
 	case "/announcements":
 		if !hasCanvasConfig(cfg) {
 			return botResponse{Text: msg(lang, "Canvas가 설정되지 않았습니다. 관리자에서 연결 후 다시 시도하세요.", "Canvas is not configured. Connect it in admin first.")}
 		}
-		return botResponse{Text: cmdAnnouncements(ctx, cfg, client, args, lang)}
+		return botResponse{Text: cmdAnnouncements(ctx, cfg, client, chatID, args, lang)}
 	case "/files":
 		if !hasCanvasConfig(cfg) {
 			return botResponse{Text: msg(lang, "Canvas가 설정되지 않았습니다. 관리자에서 연결 후 다시 시도하세요.", "Canvas is not configured. Connect it in admin first.")}
@@ -296,7 +334,7 @@ func handleTelegramCommand(ctx context.Context, cfg config, client *canvas.Clien
 				return botResponse{Text: msg(lang, "course_id 직접 입력은 더 이상 필요하지 않습니다. /files 를 눌러 강의를 선택하세요.", "Typing course_id is no longer needed. Use /files and pick a course.")}
 			}
 		}
-		resp, err := cmdFilesSelector(ctx, cfg, client, 10, lang)
+		resp, err := cmdFilesSelector(ctx, cfg, client, chatID, 10, lang)
 		if err != nil {
 			return botResponse{Text: msg(lang, "오류: ", "Error: ") + err.Error()}
 		}
@@ -337,6 +375,7 @@ func handleTelegramCallback(ctx context.Context, cfg config, client *canvas.Clie
 		if err != nil || limit <= 0 {
 			limit = 10
 		}
+		_ = addChatCourseSubscription(ctx, cfg, chatID, courseID)
 		return botResponse{Text: cmdAssignmentsByID(ctx, client, courseID, limit, lang)}
 	}
 
@@ -356,14 +395,37 @@ func handleTelegramCallback(ctx context.Context, cfg config, client *canvas.Clie
 		if err != nil || limit <= 0 {
 			limit = 10
 		}
+		_ = addChatCourseSubscription(ctx, cfg, chatID, courseID)
 		return botResponse{Text: cmdFilesByID(ctx, client, courseID, limit, lang)}
+	}
+
+	if strings.HasPrefix(data, "sub:") {
+		courseID, err := strconv.Atoi(strings.TrimPrefix(data, "sub:"))
+		if err != nil || courseID <= 0 {
+			return botResponse{Text: msg(lang, "강의 ID가 잘못되었습니다.", "Invalid course ID.")}
+		}
+		if err := addChatCourseSubscription(ctx, cfg, chatID, courseID); err != nil {
+			return botResponse{Text: msg(lang, "구독 저장 실패: ", "Failed to save subscription: ") + err.Error()}
+		}
+		return botResponse{Text: msg(lang, "강의 알림 구독이 저장되었습니다.", "Course subscription saved.")}
+	}
+
+	if strings.HasPrefix(data, "unsub:") {
+		courseID, err := strconv.Atoi(strings.TrimPrefix(data, "unsub:"))
+		if err != nil || courseID <= 0 {
+			return botResponse{Text: msg(lang, "강의 ID가 잘못되었습니다.", "Invalid course ID.")}
+		}
+		if err := removeChatCourseSubscription(ctx, cfg, chatID, courseID); err != nil {
+			return botResponse{Text: msg(lang, "구독 해제 실패: ", "Failed to remove subscription: ") + err.Error()}
+		}
+		return botResponse{Text: msg(lang, "강의 알림 구독을 해제했습니다.", "Course subscription removed.")}
 	}
 
 	return botResponse{Text: msg(lang, "지원하지 않는 동작입니다.", "Unsupported action.")}
 }
 
-func cmdAssignmentsSelector(ctx context.Context, cfg config, client *canvas.Client, limit int, lang string) (botResponse, error) {
-	courses, err := monitoredCourses(ctx, cfg, client)
+func cmdAssignmentsSelector(ctx context.Context, cfg config, client *canvas.Client, chatID string, limit int, lang string) (botResponse, error) {
+	courses, err := monitoredCourses(ctx, cfg, client, chatID)
 	if err != nil {
 		return botResponse{}, err
 	}
@@ -386,8 +448,8 @@ func cmdAssignmentsSelector(ctx context.Context, cfg config, client *canvas.Clie
 	return botResponse{Text: msg(lang, "과제를 볼 강의를 선택하세요.", "Select a course to view assignments."), Keyboard: kb}, nil
 }
 
-func cmdFilesSelector(ctx context.Context, cfg config, client *canvas.Client, limit int, lang string) (botResponse, error) {
-	courses, err := monitoredCourses(ctx, cfg, client)
+func cmdFilesSelector(ctx context.Context, cfg config, client *canvas.Client, chatID string, limit int, lang string) (botResponse, error) {
+	courses, err := monitoredCourses(ctx, cfg, client, chatID)
 	if err != nil {
 		return botResponse{}, err
 	}
@@ -410,8 +472,8 @@ func cmdFilesSelector(ctx context.Context, cfg config, client *canvas.Client, li
 	return botResponse{Text: msg(lang, "파일을 볼 강의를 선택하세요.", "Select a course to view files."), Keyboard: kb}, nil
 }
 
-func cmdCourses(ctx context.Context, cfg config, client *canvas.Client, args []string, lang string) string {
-	courses, err := monitoredCourses(ctx, cfg, client)
+func cmdCourses(ctx context.Context, cfg config, client *canvas.Client, chatID string, args []string, lang string) string {
+	courses, err := monitoredCourses(ctx, cfg, client, chatID)
 	if err != nil {
 		return msg(lang, "오류: ", "Error: ") + err.Error()
 	}
@@ -512,7 +574,7 @@ func cmdAssignmentsByID(ctx context.Context, client *canvas.Client, courseID, li
 	return trimForTelegram(strings.Join(lines, "\n"))
 }
 
-func cmdUpcoming(ctx context.Context, cfg config, client *canvas.Client, args []string, lang string) string {
+func cmdUpcoming(ctx context.Context, cfg config, client *canvas.Client, chatID string, args []string, lang string) string {
 	days := 14
 	limit := 20
 	if len(args) > 0 {
@@ -532,7 +594,7 @@ func cmdUpcoming(ctx context.Context, cfg config, client *canvas.Client, args []
 		limit = 50
 	}
 
-	courses, err := monitoredCourses(ctx, cfg, client)
+	courses, err := monitoredCourses(ctx, cfg, client, chatID)
 	if err != nil {
 		return msg(lang, "오류: ", "Error: ") + err.Error()
 	}
@@ -582,7 +644,7 @@ func cmdUpcoming(ctx context.Context, cfg config, client *canvas.Client, args []
 	return trimForTelegram(strings.Join(lines, "\n"))
 }
 
-func cmdAnnouncements(ctx context.Context, cfg config, client *canvas.Client, args []string, lang string) string {
+func cmdAnnouncements(ctx context.Context, cfg config, client *canvas.Client, chatID string, args []string, lang string) string {
 	limit := 10
 	if len(args) > 0 {
 		if v, err := strconv.Atoi(args[0]); err == nil && v > 0 {
@@ -593,7 +655,7 @@ func cmdAnnouncements(ctx context.Context, cfg config, client *canvas.Client, ar
 		limit = 30
 	}
 
-	courses, err := monitoredCourses(ctx, cfg, client)
+	courses, err := monitoredCourses(ctx, cfg, client, chatID)
 	if err != nil {
 		return msg(lang, "오류: ", "Error: ") + err.Error()
 	}
@@ -667,27 +729,186 @@ func cmdFilesByID(ctx context.Context, client *canvas.Client, courseID, limit in
 	return trimForTelegram(strings.Join(lines, "\n"))
 }
 
-func monitoredCourses(ctx context.Context, cfg config, client *canvas.Client) ([]canvas.Course, error) {
-	courses, err := client.GetCourses(ctx)
+func openBindingStore(ctx context.Context, cfg config) (*binding.Store, error) {
+	if strings.TrimSpace(cfg.Database.URL) == "" {
+		return nil, errors.New("DATABASE_URL is required")
+	}
+	store, err := binding.New(cfg.Database.URL)
 	if err != nil {
 		return nil, err
 	}
-	if len(cfg.Monitor.Courses) == 0 {
-		return courses, nil
+	if err := store.EnsureSchema(ctx); err != nil {
+		_ = store.Close()
+		return nil, err
 	}
+	return store, nil
+}
 
-	filter := make(map[int]bool, len(cfg.Monitor.Courses))
-	for _, id := range cfg.Monitor.Courses {
+func addChatCourseSubscription(ctx context.Context, cfg config, chatID string, courseID int) error {
+	store, err := openBindingStore(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	return store.AddChatCourse(ctx, chatID, courseID)
+}
+
+func removeChatCourseSubscription(ctx context.Context, cfg config, chatID string, courseID int) error {
+	store, err := openBindingStore(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	return store.RemoveChatCourse(ctx, chatID, courseID)
+}
+
+func listChatCourseIDs(ctx context.Context, cfg config, chatID string) ([]int, error) {
+	store, err := openBindingStore(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	return store.ListChatCourses(ctx, chatID)
+}
+
+func filterCoursesByIDs(courses []canvas.Course, ids []int) []canvas.Course {
+	if len(ids) == 0 {
+		return courses
+	}
+	filter := make(map[int]bool, len(ids))
+	for _, id := range ids {
 		filter[id] = true
 	}
-
 	var out []canvas.Course
 	for _, c := range courses {
 		if filter[c.ID] {
 			out = append(out, c)
 		}
 	}
-	return out, nil
+	return out
+}
+
+func availableCourses(ctx context.Context, cfg config, client *canvas.Client) ([]canvas.Course, error) {
+	courses, err := client.GetCourses(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return filterCoursesByIDs(courses, cfg.Monitor.Courses), nil
+}
+
+func monitoredCourses(ctx context.Context, cfg config, client *canvas.Client, chatID string) ([]canvas.Course, error) {
+	courses, err := availableCourses(ctx, cfg, client)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(cfg.Database.URL) == "" || chatID == "" {
+		return courses, nil
+	}
+
+	subIDs, err := listChatCourseIDs(ctx, cfg, chatID)
+	if err != nil || len(subIDs) == 0 {
+		return courses, nil
+	}
+	return filterCoursesByIDs(courses, subIDs), nil
+}
+
+func cmdListening(ctx context.Context, cfg config, client *canvas.Client, chatID, lang string) string {
+	if strings.TrimSpace(cfg.Database.URL) == "" {
+		return msg(lang, "DATABASE_URL이 필요합니다.", "DATABASE_URL is required.")
+	}
+
+	ids, err := listChatCourseIDs(ctx, cfg, chatID)
+	if err != nil {
+		return msg(lang, "오류: ", "Error: ") + err.Error()
+	}
+	if len(ids) == 0 {
+		return msg(lang, "구독 중인 강의가 없습니다. /listen 으로 추가하세요.", "No subscribed courses. Add one with /listen.")
+	}
+
+	if !hasCanvasConfig(cfg) {
+		lines := []string{msg(lang, "구독 강의 ID:", "Subscribed course IDs:")}
+		for _, id := range ids {
+			lines = append(lines, fmt.Sprintf("- %d", id))
+		}
+		return strings.Join(lines, "\n")
+	}
+
+	courses, err := availableCourses(ctx, cfg, client)
+	if err != nil {
+		return msg(lang, "오류: ", "Error: ") + err.Error()
+	}
+	nameByID := make(map[int]string, len(courses))
+	for _, c := range courses {
+		nameByID[c.ID] = c.Name
+	}
+
+	lines := []string{msg(lang, "구독 중인 강의:", "Subscribed courses:")}
+	for _, id := range ids {
+		name := nameByID[id]
+		if name == "" {
+			name = strconv.Itoa(id)
+		}
+		lines = append(lines, fmt.Sprintf("- %d | %s", id, name))
+	}
+	return trimForTelegram(strings.Join(lines, "\n"))
+}
+
+func cmdListenSelector(ctx context.Context, cfg config, client *canvas.Client, lang string) (botResponse, error) {
+	courses, err := availableCourses(ctx, cfg, client)
+	if err != nil {
+		return botResponse{}, err
+	}
+	if len(courses) == 0 {
+		return botResponse{Text: msg(lang, "강의가 없습니다.", "No courses found.")}, nil
+	}
+
+	kb := &telegramInlineMarkup{}
+	for _, c := range courses {
+		label := c.Name
+		if len([]rune(label)) > 48 {
+			label = string([]rune(label)[:48]) + "..."
+		}
+		kb.InlineKeyboard = append(kb.InlineKeyboard, []telegramInlineButton{{
+			Text:         label,
+			CallbackData: fmt.Sprintf("sub:%d", c.ID),
+		}})
+	}
+	return botResponse{Text: msg(lang, "알림을 받을 강의를 선택하세요.", "Select a course to subscribe for alerts."), Keyboard: kb}, nil
+}
+
+func cmdUnlistenSelector(ctx context.Context, cfg config, client *canvas.Client, chatID, lang string) (botResponse, error) {
+	ids, err := listChatCourseIDs(ctx, cfg, chatID)
+	if err != nil {
+		return botResponse{}, err
+	}
+	if len(ids) == 0 {
+		return botResponse{Text: msg(lang, "구독 중인 강의가 없습니다.", "No subscribed courses.")}, nil
+	}
+
+	courses, err := availableCourses(ctx, cfg, client)
+	if err != nil {
+		return botResponse{}, err
+	}
+	nameByID := make(map[int]string, len(courses))
+	for _, c := range courses {
+		nameByID[c.ID] = c.Name
+	}
+
+	kb := &telegramInlineMarkup{}
+	for _, id := range ids {
+		label := nameByID[id]
+		if label == "" {
+			label = fmt.Sprintf("Course %d", id)
+		}
+		if len([]rune(label)) > 48 {
+			label = string([]rune(label)[:48]) + "..."
+		}
+		kb.InlineKeyboard = append(kb.InlineKeyboard, []telegramInlineButton{{
+			Text:         label,
+			CallbackData: fmt.Sprintf("unsub:%d", id),
+		}})
+	}
+	return botResponse{Text: msg(lang, "구독 해제할 강의를 선택하세요.", "Select a course to unsubscribe."), Keyboard: kb}, nil
 }
 
 func botHelpMessage(lang string) string {
@@ -696,6 +917,9 @@ func botHelpMessage(lang string) string {
 			"Available commands:",
 			"/status",
 			"/settings",
+			"/listening",
+			"/listen",
+			"/unlisten",
 			"/courses [keyword]",
 			"/assignments (interactive course selector)",
 			"/upcoming [days] [limit]",
@@ -708,6 +932,9 @@ func botHelpMessage(lang string) string {
 		"사용 가능한 명령어:",
 		"/status",
 		"/settings",
+		"/listening",
+		"/listen",
+		"/unlisten",
 		"/courses [키워드]",
 		"/assignments (강의 선택기)",
 		"/upcoming [days] [limit]",

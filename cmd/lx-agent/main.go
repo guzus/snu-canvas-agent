@@ -292,7 +292,18 @@ func handleBindChat(ctx context.Context, cfg config, args []string) {
 }
 
 func handleMonitor(command string, cfg config, client *canvas.Client, logger *slog.Logger) {
-	n := buildNotifier(context.Background(), cfg, logger)
+	ctx := context.Background()
+	n := buildNotifier(ctx, cfg, logger)
+
+	monitorChatID := ""
+	if strings.EqualFold(strings.TrimSpace(cfg.Notifier.Provider), "telegram") {
+		cid, err := resolveTelegramChatID(ctx, cfg)
+		if err != nil {
+			logger.Warn("resolve monitor chat id failed", "err", err)
+		} else {
+			monitorChatID = cid
+		}
+	}
 
 	interval, err := time.ParseDuration(cfg.Monitor.PollInterval)
 	if err != nil {
@@ -305,6 +316,8 @@ func handleMonitor(command string, cfg config, client *canvas.Client, logger *sl
 		SummarizeNew:   cfg.Monitor.SummarizeNew,
 		DeadlineAlerts: cfg.Monitor.DeadlineAlerts,
 		StatePath:      cfg.Monitor.StatePath,
+		DatabaseURL:    cfg.Database.URL,
+		ChatID:         monitorChatID,
 	}, logger)
 
 	if command == "once" {

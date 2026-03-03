@@ -63,6 +63,9 @@ go run ./cmd/lx-agent serve
 
 - `/status`
 - `/settings` (change language: Korean/English)
+- `/listening` (show subscribed courses for this chat)
+- `/listen` (interactive selector to subscribe course alerts)
+- `/unlisten` (interactive selector to unsubscribe)
 - `/courses [keyword]`
 - `/assignments` (interactive course selector)
 - `/files` (interactive course selector)
@@ -115,6 +118,8 @@ bun run admin:frontend
 - Gemini integration has been removed from this repository.
 - Course filtering can be fixed to a term or subset using `monitor.courses` in config.
 - `serve` can run without Canvas config (Telegram bot only). Canvas commands will return a not-configured message.
+- Chat course subscriptions are persisted in Postgres and used by monitor filtering when available.
+- Sent alerts are persisted with metadata/dedupe keys in Postgres to prevent re-sending duplicates.
 
 ## License
 
