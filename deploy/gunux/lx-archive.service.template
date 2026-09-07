@@ -8,6 +8,9 @@ Wants=network-online.target
 Type=oneshot
 
 Environment=ARCHIVE_DIR=__ARCHIVE_DIR__
+
+# Hooker URL/key plus the chat and forum thread alerts are routed to.
+EnvironmentFile=%h/.config/lx-agent/env
 ExecStart=%h/.local/bin/lx-agent -config %h/.config/lx-agent/config.yaml sync --notify
 
 # A run is ~1 minute once the archive is warm; the first one pulls everything.

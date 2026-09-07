@@ -43,6 +43,13 @@ type config struct {
 			BotToken string `yaml:"bot_token"`
 			ChatID   string `yaml:"chat_id"`
 		} `yaml:"telegram"`
+		Hooker struct {
+			URL             string `yaml:"url"`
+			APIKey          string `yaml:"api_key"`
+			Topic           string `yaml:"topic"`
+			ChatID          string `yaml:"chat_id"`
+			MessageThreadID string `yaml:"message_thread_id"`
+		} `yaml:"hooker"`
 	} `yaml:"notifier"`
 	Archive struct {
 		Dir           string `yaml:"dir"`
@@ -122,6 +129,8 @@ func main() {
 	case "sync", "archive":
 		requireCanvasConfig(cfg, cmd)
 		handleSync(ctx, cfg, client, logger, cmdArgs)
+	case "notify-test":
+		handleNotifyTest(ctx, cfg, logger)
 	case "bot":
 		handleBot(cfg, client, logger)
 	case "serve":
@@ -358,6 +367,18 @@ func buildNotifier(ctx context.Context, cfg config, logger *slog.Logger) notifie
 	switch strings.ToLower(strings.TrimSpace(cfg.Notifier.Provider)) {
 	case "", "stdout":
 		return notifier.NewStdout()
+	case "hooker":
+		if strings.TrimSpace(cfg.Notifier.Hooker.URL) == "" {
+			logger.Warn("hooker provider without notifier.hooker.url; falling back to stdout")
+			return notifier.NewStdout()
+		}
+		return notifier.NewHooker(
+			cfg.Notifier.Hooker.URL,
+			cfg.Notifier.Hooker.APIKey,
+			cfg.Notifier.Hooker.Topic,
+			cfg.Notifier.Hooker.ChatID,
+			cfg.Notifier.Hooker.MessageThreadID,
+		)
 	case "telegram":
 		if cfg.Notifier.Telegram.BotToken == "" {
 			exitErr(errors.New("telegram provider requires notifier.telegram.bot_token"))
@@ -522,6 +543,24 @@ func applyEnvOverrides(cfg *config) {
 	if v := strings.TrimSpace(os.Getenv("ARCHIVE_DIR")); v != "" {
 		cfg.Archive.Dir = v
 	}
+	// Hooker credentials come from the host's own env file so they never have
+	// to be copied into this repo's config.
+	if v := strings.TrimSpace(os.Getenv("HOOKER_URL")); v != "" {
+		cfg.Notifier.Hooker.URL = v
+		cfg.Notifier.Provider = "hooker"
+	}
+	if v := strings.TrimSpace(os.Getenv("HOOKER_API_KEY")); v != "" {
+		cfg.Notifier.Hooker.APIKey = v
+	}
+	if v := strings.TrimSpace(os.Getenv("HOOKER_TOPIC")); v != "" {
+		cfg.Notifier.Hooker.Topic = v
+	}
+	if v := strings.TrimSpace(os.Getenv("HOOKER_CHAT_ID")); v != "" {
+		cfg.Notifier.Hooker.ChatID = v
+	}
+	if v := strings.TrimSpace(os.Getenv("HOOKER_MESSAGE_THREAD_ID")); v != "" {
+		cfg.Notifier.Hooker.MessageThreadID = v
+	}
 	if v := strings.TrimSpace(os.Getenv("DATABASE_URL")); v != "" {
 		cfg.Database.URL = v
 	}
@@ -622,6 +661,7 @@ Commands:
   files [course-id]
   announcements
   sync [--out DIR] [--course ID]... [--dry-run] [--include-videos] [--max-mb N] [--notify]
+  notify-test
   bind-chat [chat-id]
   bot
   serve

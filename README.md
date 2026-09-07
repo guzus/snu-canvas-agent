@@ -83,8 +83,10 @@ Notes that matter in practice:
 - **Locked files are skipped**, not written as empty stubs.
 - **Video/audio is opt-in** (`--include-videos` / `archive.include_videos`).
 - **Expired credentials are loud.** The credential is the thing that rots; when
-  Canvas returns 401 the run sends a Telegram alert and exits non-zero instead
-  of quietly archiving nothing.
+  Canvas returns 401 the run alerts through hooker at priority 5 and exits
+  non-zero instead of quietly archiving nothing. Routine "N files archived"
+  notices go out at priority 3, so the one that needs action is not skimmed
+  past with the ones that do not.
 
 ### Schedule it (Linux host, recommended)
 
@@ -115,6 +117,24 @@ every later firing.
 ssh gunux journalctl --user -u lx-archive.service -f
 ```
 
+Alerts route through hooker to a Telegram forum thread. The deploy renders
+`~/.config/lx-agent/env` **on the host** from the host's own
+`~/.config/hooker/env`, so the credentials never transit the machine running
+the deploy; it is rewritten rather than pointed at because that file uses
+`export VAR=...`, which systemd's `EnvironmentFile` parses as a variable named
+`export VAR`.
+
+Verify the alert path on demand — it is otherwise only exercised when something
+is already broken:
+
+```bash
+ssh gunux 'set -a; . ~/.config/lx-agent/env; set +a; ~/.local/bin/lx-agent -config ~/.config/lx-agent/config.yaml notify-test'
+```
+
+hooker's `delivered: 1` only reports that *some* route accepted the message, so
+the notifier compares the echoed `destinations` against the chat and thread it
+addressed and fails loudly on a misroute.
+
 Seeding matters: the manifest is keyed by Canvas file ID and stores relative
 paths, so an existing archive transplants cleanly with `rsync` and the first
 remote run finds it already complete — no re-downloading gigabytes from SNU.
@@ -143,6 +163,7 @@ Disk Access and pass `ALLOW_TCC_DIR=1`.
 - `assignments [course-id]`
 - `files [course-id]`
 - `announcements`
+- `notify-test`
 - `sync [--out DIR] [--course ID]... [--dry-run] [--include-videos] [--max-mb N] [--notify]`
 - `bind-chat [chat-id]`
 - `bot`
@@ -194,6 +215,7 @@ bun run admin:frontend
 
 - `CANVAS_URL`
 - `CANVAS_TOKEN`
+- `HOOKER_URL`, `HOOKER_API_KEY`, `HOOKER_TOPIC`, `HOOKER_CHAT_ID`, `HOOKER_MESSAGE_THREAD_ID`
 - `CANVAS_SESSION_COOKIE`
 - `ARCHIVE_DIR`
 - `TELEGRAM_BOT_TOKEN`

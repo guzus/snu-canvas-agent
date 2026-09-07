@@ -23,7 +23,13 @@ archive:
   # courses: [12345, 67890]          # Restrict the archive to these course IDs
 
 notifier:
-  provider: "stdout"                 # stdout | telegram | (extensible)
+  provider: "stdout"                 # stdout | hooker | telegram
+  hooker:                            # alerts via hooker -> Telegram
+    url: ""                          # HOOKER_URL (env override; keep secrets out of this file)
+    api_key: ""                      # HOOKER_API_KEY
+    topic: "learningx"
+    chat_id: ""                      # e.g. "-1003805075491"
+    message_thread_id: ""            # forum thread, e.g. "200238"
   telegram:
     bot_token: ""                    # Telegram bot token from @BotFather
     chat_id: ""                      # Optional: if empty, lookup from database by canvas token

@@ -80,7 +80,8 @@ func handleSync(ctx context.Context, cfg config, client *canvas.Client, logger *
 		if errors.Is(err, archive.ErrAuthExpired) {
 			// The whole point of the scheduled job is that the user stops
 			// checking by hand, so a dead cookie has to reach them.
-			alert(ctx, cfg, logger, "🔒 *LearningX 아카이브 중단*\nCanvas 인증이 만료됐습니다. 세션 쿠키/토큰을 다시 발급해 주세요.\n\n"+err.Error())
+			alertPriority(ctx, cfg, logger, 5,
+				"🔒 LearningX 아카이브 중단\nCanvas 인증이 만료됐습니다. 세션 쿠키/토큰을 다시 발급해 주세요.\n\n"+err.Error())
 		}
 		exitErr(err)
 	}
@@ -132,11 +133,65 @@ func syncNotification(r *archive.Result, dryRun bool) string {
 }
 
 // alert sends through the configured notifier, falling back to stderr so a
-// failure is never swallowed just because Telegram is unreachable.
+// failure is never swallowed just because the notifier is unreachable.
 func alert(ctx context.Context, cfg config, logger *slog.Logger, msg string) {
+	alertPriority(ctx, cfg, logger, 3, msg)
+}
+
+// prioritySender is implemented by notifiers that can rank a message. An
+// expired credential has to stand out from a routine "3 new files" notice, or
+// the alert that matters gets skimmed past with the ones that don't.
+type prioritySender interface {
+	Publish(ctx context.Context, title, text string, priority int) error
+}
+
+func alertPriority(ctx context.Context, cfg config, logger *slog.Logger, priority int, msg string) {
 	n := buildNotifier(ctx, cfg, logger)
-	if err := n.Send(ctx, msg); err != nil {
+
+	var err error
+	if ps, ok := n.(prioritySender); ok {
+		title, body := firstLine(msg)
+		err = ps.Publish(ctx, title, body, priority)
+	} else {
+		err = n.Send(ctx, msg)
+	}
+
+	if err != nil {
 		logger.Warn("notify failed", "err", err)
 		fmt.Fprintln(os.Stderr, msg)
 	}
+}
+
+func firstLine(msg string) (string, string) {
+	msg = strings.TrimSpace(msg)
+	title, rest, found := strings.Cut(msg, "\n")
+	title = strings.TrimSpace(strings.Trim(strings.TrimSpace(title), "*_"))
+	if !found {
+		return title, ""
+	}
+	return title, strings.TrimSpace(rest)
+}
+
+// handleNotifyTest sends a real message through the configured notifier. The
+// alert path is only exercised when something breaks, which is the worst time
+// to discover the credentials or routing were wrong — this makes it checkable
+// on demand, and after every cookie rotation or redeploy.
+func handleNotifyTest(ctx context.Context, cfg config, logger *slog.Logger) {
+	n := buildNotifier(ctx, cfg, logger)
+
+	title := "✅ LearningX 아카이브 알림 테스트"
+	body := fmt.Sprintf("provider=%s\narchive=%s\n이 메시지가 보이면 알림 경로가 살아 있습니다.",
+		cfg.Notifier.Provider, cfg.Archive.Dir)
+
+	var err error
+	if ps, ok := n.(prioritySender); ok {
+		err = ps.Publish(ctx, title, body, 2)
+	} else {
+		err = n.Send(ctx, title+"\n"+body)
+	}
+	if err != nil {
+		exitErr(fmt.Errorf("notify test failed: %w", err))
+	}
+
+	fmt.Printf("sent via %s\n", cfg.Notifier.Provider)
 }

@@ -148,3 +148,23 @@ func (m *Manifest) Count() int {
 	defer m.mu.Unlock()
 	return len(m.Files)
 }
+
+// Snapshot returns a copy of every entry keyed by Canvas file ID, for readers
+// that only want to look (the web UI) and must not hold the manifest lock.
+func (m *Manifest) Snapshot() map[int]Entry {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make(map[int]Entry, len(m.Files))
+	for k, e := range m.Files {
+		id, err := strconv.Atoi(k)
+		if err != nil {
+			continue
+		}
+		out[id] = e
+	}
+	return out
+}
+
+// Path is the manifest file's location on disk.
+func (m *Manifest) Path() string { return m.path }

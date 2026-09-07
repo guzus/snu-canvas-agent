@@ -13,6 +13,12 @@ set -euo pipefail
 HOST="${HOST:-gunux}"
 ARCHIVE_DIR="${ARCHIVE_DIR:-/ssd1/etl-archive}"
 ONCALENDAR="${ONCALENDAR:-*-*-* 00/6:00:00}"   # every 6 hours
+
+# Alerts go through hooker, which fans out to Telegram.
+HOOKER_ENV="${HOOKER_ENV:-.config/hooker/env}"
+HOOKER_TOPIC="${HOOKER_TOPIC:-learningx}"
+HOOKER_CHAT_ID="${HOOKER_CHAT_ID:--1003805075491}"
+HOOKER_MESSAGE_THREAD_ID="${HOOKER_MESSAGE_THREAD_ID:-200238}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONFIG="${CONFIG:-$REPO_ROOT/config.yaml}"
 
@@ -105,6 +111,25 @@ if [[ "$SEED" == "1" ]]; then
   # whole tree transplants cleanly and the first remote run finds it complete.
   rsync "${rsync_flags[@]}" "$LOCAL_ARCHIVE/" "$HOST:$ARCHIVE_DIR/"
 fi
+
+# --- notifier env ------------------------------------------------------------
+# The hooker credentials are rendered on the host from the host's own env file,
+# so they never transit this machine. It also has to be rewritten rather than
+# pointed at: ~/.config/hooker/env uses `export VAR=...`, which systemd's
+# EnvironmentFile does not understand — it would parse the name as "export VAR".
+say "writing notifier env on $HOST"
+ssh_ "test -f ~/$HOOKER_ENV" \
+  || fail "~/$HOOKER_ENV not found on $HOST; set HOOKER_ENV= to the right path"
+ssh_ "set -a; . ~/$HOOKER_ENV; set +a;
+      : \"\${HOOKER_URL:?HOOKER_URL missing in ~/$HOOKER_ENV}\";
+      umask 077;
+      {
+        printf 'HOOKER_URL=%s\n' \"\$HOOKER_URL\";
+        printf 'HOOKER_API_KEY=%s\n' \"\$HOOKER_API_KEY\";
+        printf 'HOOKER_TOPIC=%s\n' '$HOOKER_TOPIC';
+        printf 'HOOKER_CHAT_ID=%s\n' '$HOOKER_CHAT_ID';
+        printf 'HOOKER_MESSAGE_THREAD_ID=%s\n' '$HOOKER_MESSAGE_THREAD_ID';
+      } > ~/.config/lx-agent/env.new && mv ~/.config/lx-agent/env.new ~/.config/lx-agent/env"
 
 # --- install units ----------------------------------------------------------
 say "installing systemd user units"
