@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -19,10 +20,13 @@ import (
 // fakeCanvas mimics an SNU-style instance: the Files tab is disabled (403), so
 // materials are only reachable through module items.
 type fakeCanvas struct {
-	server        *httptest.Server
-	filesTabOK    bool
-	downloadCount int64
-	courseListErr int
+	server                *httptest.Server
+	filesTabOK            bool
+	downloadCount         int64
+	courseListErr         int
+	perCourseStatus       int // status returned by every per-course endpoint
+	omitInlineModuleItems bool
+	extraFiles            []map[string]any
 }
 
 func newFakeCanvas(t *testing.T, filesTabOK bool) *fakeCanvas {
@@ -42,33 +46,78 @@ func newFakeCanvas(t *testing.T, filesTabOK bool) *fakeCanvas {
 		})
 	})
 
+	gate := func(w http.ResponseWriter) bool {
+		if f.perCourseStatus != 0 {
+			w.WriteHeader(f.perCourseStatus)
+			if f.perCourseStatus == http.StatusUnauthorized {
+				fmt.Fprint(w, `{"status":"unauthenticated"}`)
+			} else {
+				fmt.Fprint(w, `{"status":"unauthorized"}`)
+			}
+			return false
+		}
+		return true
+	}
+
 	mux.HandleFunc("/api/v1/courses/101/files", func(w http.ResponseWriter, r *http.Request) {
+		if !gate(w) {
+			return
+		}
 		if !f.filesTabOK {
 			w.WriteHeader(http.StatusForbidden)
 			fmt.Fprint(w, `{"status":"unauthorized","errors":[{"message":"disabled"}]}`)
 			return
 		}
-		writeJSON(w, []map[string]any{fileJSON(11, "1주차 09/01 개요.pdf", 3, f.server.URL)})
+		out := []map[string]any{fileJSON(11, "1주차 09/01 개요.pdf", 3, f.server.URL)}
+		for _, e := range f.extraFiles {
+			c := map[string]any{}
+			for k, v := range e {
+				c[k] = v
+			}
+			c["url"] = f.server.URL + fmt.Sprintf("/download/%v", c["id"])
+			out = append(out, c)
+		}
+		writeJSON(w, out)
 	})
 
 	mux.HandleFunc("/api/v1/courses/101/folders", func(w http.ResponseWriter, r *http.Request) {
+		if !gate(w) {
+			return
+		}
 		writeJSON(w, []map[string]any{
 			{"id": 3, "name": "1주차", "full_name": "course files/1주차"},
 		})
 	})
 
+	moduleItems := []map[string]any{
+		{"id": 900, "title": "강의노트", "type": "File", "content_id": 11},
+		{"id": 901, "title": "실습자료", "type": "File", "content_id": 12},
+		{"id": 902, "title": "외부링크", "type": "ExternalUrl"},
+		{"id": 903, "title": "잠긴자료", "type": "File", "content_id": 13},
+	}
+
 	mux.HandleFunc("/api/v1/courses/101/modules", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, []map[string]any{
-			{"id": 1, "name": "Week 1", "items": []map[string]any{
-				{"id": 900, "title": "강의노트", "type": "File", "content_id": 11},
-				{"id": 901, "title": "실습자료", "type": "File", "content_id": 12},
-				{"id": 902, "title": "외부링크", "type": "ExternalUrl"},
-				{"id": 903, "title": "잠긴자료", "type": "File", "content_id": 13},
-			}},
-		})
+		if !gate(w) {
+			return
+		}
+		m := map[string]any{"id": 1, "name": "Week 1"}
+		if !f.omitInlineModuleItems {
+			m["items"] = moduleItems
+		}
+		writeJSON(w, []map[string]any{m})
+	})
+
+	mux.HandleFunc("/api/v1/courses/101/modules/1/items", func(w http.ResponseWriter, r *http.Request) {
+		if !gate(w) {
+			return
+		}
+		writeJSON(w, moduleItems)
 	})
 
 	mux.HandleFunc("/api/v1/courses/101/files/", func(w http.ResponseWriter, r *http.Request) {
+		if !gate(w) {
+			return
+		}
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/11"):
 			writeJSON(w, fileJSON(11, "1주차 09/01 개요.pdf", 3, f.server.URL))
@@ -87,12 +136,18 @@ func newFakeCanvas(t *testing.T, filesTabOK bool) *fakeCanvas {
 	})
 
 	mux.HandleFunc("/api/v1/courses/101/assignments", func(w http.ResponseWriter, r *http.Request) {
+		if !gate(w) {
+			return
+		}
 		writeJSON(w, []map[string]any{
 			{"id": 5, "name": "과제1", "description": `<a href="/courses/101/files/77/download">첨부</a>`},
 		})
 	})
 
 	mux.HandleFunc("/api/v1/announcements", func(w http.ResponseWriter, r *http.Request) {
+		if !gate(w) {
+			return
+		}
 		writeJSON(w, []map[string]any{})
 	})
 
@@ -117,6 +172,12 @@ func fileJSON(id int, display string, folderID int, base string) map[string]any 
 		"updated_at":   "2026-09-01T00:00:00Z",
 		"url":          base + fmt.Sprintf("/download/%d", id),
 	}
+}
+
+func fileJSONSized(id int, display string, folderID int, base string, size int64) map[string]any {
+	f := fileJSON(id, display, folderID, base)
+	f["size"] = size
+	return f
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -291,5 +352,114 @@ func TestShortBodyIsNotRecordedAsComplete(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(target); string(b) != "PDFBYTES" {
 		t.Fatalf("file not repaired: %q", b)
+	}
+}
+
+// macOS volumes are case-insensitive: two Canvas files differing only in case
+// must not overwrite each other and then re-download in alternation forever.
+func TestCaseOnlyNameCollisionGetsDistinctPaths(t *testing.T) {
+	f := newFakeCanvas(t, true)
+	f.extraFiles = []map[string]any{
+		fileJSONSized(21, "Lecture.pdf", 3, "", 8),
+		fileJSONSized(22, "lecture.pdf", 3, "", 8),
+	}
+	dir := t.TempDir()
+	s := newSyncer(f)
+
+	if _, err := s.Run(context.Background(), Options{Dir: dir}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	m := NewManifest(dir)
+	if err := m.Load(); err != nil {
+		t.Fatal(err)
+	}
+	a, okA := m.Get(21)
+	b, okB := m.Get(22)
+	if !okA || !okB {
+		t.Fatalf("both files should be archived: %v %v", okA, okB)
+	}
+	if strings.EqualFold(a.RelPath, b.RelPath) {
+		t.Fatalf("case-only collision shares one on-disk path: %q vs %q", a.RelPath, b.RelPath)
+	}
+
+	// The real symptom of the bug: a second run re-downloads forever.
+	before := atomic.LoadInt64(&f.downloadCount)
+	res, err := s.Run(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if res.Downloaded != 0 || atomic.LoadInt64(&f.downloadCount) != before {
+		t.Fatalf("second run re-downloaded %d files", res.Downloaded)
+	}
+}
+
+// Canvas omits inline module items for large modules; the archive must fall
+// back to the module-items endpoint instead of silently finding nothing.
+func TestModuleItemsFallbackWhenInlineItemsOmitted(t *testing.T) {
+	f := newFakeCanvas(t, false)
+	f.omitInlineModuleItems = true
+	dir := t.TempDir()
+
+	res, err := newSyncer(f).Run(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Downloaded != 3 {
+		t.Fatalf("downloaded = %d, want 3 via the module-items endpoint; errors=%v", res.Downloaded, res.Errors)
+	}
+}
+
+// A session that dies after the course list must abort, not report a clean run.
+func TestAuthExpiringMidRunAborts(t *testing.T) {
+	f := newFakeCanvas(t, true)
+	f.perCourseStatus = http.StatusUnauthorized
+
+	_, err := newSyncer(f).Run(context.Background(), Options{Dir: t.TempDir()})
+	if err == nil {
+		t.Fatal("expected an error when the session expires mid-run")
+	}
+	if !errors.Is(err, ErrAuthExpired) {
+		t.Fatalf("error = %v, want ErrAuthExpired", err)
+	}
+}
+
+// If every discovery source is closed, "0 files" is not a fact about the
+// course — the run must report failure so the scheduled job exits non-zero.
+func TestAllSourcesForbiddenIsAFailureNotAnEmptyRun(t *testing.T) {
+	f := newFakeCanvas(t, true)
+	f.perCourseStatus = http.StatusForbidden
+
+	res, err := newSyncer(f).Run(context.Background(), Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Failed == 0 {
+		t.Fatal("all sources forbidden was reported as a successful empty run")
+	}
+}
+
+// A file literally named "x.pdf.part" must not be destroyed by the download of
+// "x.pdf" writing its sidecar.
+func TestPartSuffixedFileIsNotClobbered(t *testing.T) {
+	f := newFakeCanvas(t, true)
+	f.extraFiles = []map[string]any{
+		fileJSONSized(31, "notes.pdf", 3, "", 8),
+		fileJSONSized(32, "notes.pdf.part", 3, "", 8),
+	}
+	dir := t.TempDir()
+
+	if _, err := newSyncer(f).Run(context.Background(), Options{Dir: dir}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	for _, name := range []string{"notes.pdf", "notes.pdf.part"} {
+		p := filepath.Join(dir, "자료구조 (2026-1)", "1주차", name)
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("%s missing: %v", name, err)
+		}
+		if string(b) != "PDFBYTES" {
+			t.Fatalf("%s content = %q", name, b)
+		}
 	}
 }

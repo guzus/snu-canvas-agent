@@ -62,11 +62,31 @@ func lastRune(s string) (rune, int) {
 	return last, len(string(last))
 }
 
+// pathKey is the identity a path has *on disk*. macOS volumes are
+// case-insensitive by default, so "Lecture.pdf" and "lecture.pdf" are one file
+// there — comparing raw strings would let two Canvas files overwrite each other
+// and then re-download in alternation on every scheduled run.
+func pathKey(rel string) string {
+	return strings.ToLower(rel)
+}
+
 // disambiguate appends the Canvas file ID before the extension when the
-// intended path is already claimed by a different file.
-func disambiguate(rel string, fileID int) string {
+// intended path is already claimed by a different file. taken maps pathKey to
+// the file ID holding it; the suffixed name is re-checked, because sanitizing
+// can make a suffixed name collide in turn (an "x:" and an "x--3" in one
+// folder both reduce to "x--3").
+func disambiguate(rel string, fileID int, taken map[string]int) string {
 	ext := path.Ext(rel)
-	return strings.TrimSuffix(rel, ext) + fmt.Sprintf("-%d", fileID) + ext
+	stem := strings.TrimSuffix(rel, ext)
+
+	candidate := fmt.Sprintf("%s-%d%s", stem, fileID, ext)
+	for n := 2; ; n++ {
+		owner, ok := taken[pathKey(candidate)]
+		if !ok || owner == fileID {
+			return candidate
+		}
+		candidate = fmt.Sprintf("%s-%d-%d%s", stem, fileID, n, ext)
+	}
 }
 
 // folderRelPath converts a Canvas folder full_name ("course files/2주차") into

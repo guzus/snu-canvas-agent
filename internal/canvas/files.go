@@ -82,3 +82,26 @@ func (c *Client) GetFolders(ctx context.Context, courseID int) ([]Folder, error)
 	}
 	return folders, nil
 }
+
+// GetModuleItems fetches a module's items from the dedicated endpoint. Canvas
+// omits inline `items` from the modules list when a module holds many of them,
+// so relying on the inline array alone silently loses files in exactly the
+// large courses that need archiving most.
+func (c *Client) GetModuleItems(ctx context.Context, courseID, moduleID int) ([]ModuleItem, error) {
+	params := url.Values{"per_page": {"100"}}
+
+	raw, err := c.getPaginated(ctx, fmt.Sprintf("/courses/%d/modules/%d/items", courseID, moduleID), params)
+	if err != nil {
+		return nil, err
+	}
+
+	var items []ModuleItem
+	for _, r := range raw {
+		var it ModuleItem
+		if err := json.Unmarshal(r, &it); err != nil {
+			continue
+		}
+		items = append(items, it)
+	}
+	return items, nil
+}

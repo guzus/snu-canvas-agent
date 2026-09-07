@@ -225,11 +225,14 @@ func (c *Client) DownloadTo(ctx context.Context, fileURL, dst string) (int64, er
 		return 0, err
 	}
 
-	tmp := dst + ".part"
-	f, err := os.Create(tmp)
+	// A unique temp name rather than dst+".part": a course file literally
+	// named "lecture.pdf.part" would otherwise be truncated by the download of
+	// "lecture.pdf", and two workers could collide on the same sidecar.
+	f, err := os.CreateTemp(filepath.Dir(dst), ".lx-download-*.part")
 	if err != nil {
 		return 0, err
 	}
+	tmp := f.Name()
 
 	n, err := io.Copy(f, resp.Body)
 	closeErr := f.Close()

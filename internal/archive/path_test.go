@@ -46,7 +46,20 @@ func TestTruncateNamePreservesExtension(t *testing.T) {
 }
 
 func TestDisambiguate(t *testing.T) {
-	if got := disambiguate("course/week/a.pdf", 42); got != "course/week/a-42.pdf" {
+	if got := disambiguate("course/week/a.pdf", 42, map[string]int{}); got != "course/week/a-42.pdf" {
 		t.Fatalf("got %q", got)
+	}
+
+	// Sanitizing can make the suffixed name collide in turn: "x:" and "x--3"
+	// in one folder both reduce to "x--3".
+	taken := map[string]int{"w/x--3.pdf": 1}
+	if got := disambiguate("w/x-.pdf", 3, taken); got != "w/x--3-2.pdf" {
+		t.Fatalf("suffixed collision not resolved: %q", got)
+	}
+
+	// Collisions must be detected case-insensitively, as on macOS.
+	taken = map[string]int{"w/x-9.pdf": 1}
+	if got := disambiguate("w/X.pdf", 9, taken); got != "w/X-9-2.pdf" {
+		t.Fatalf("case-insensitive collision not resolved: %q", got)
 	}
 }

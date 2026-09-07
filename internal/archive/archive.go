@@ -80,6 +80,16 @@ func New(client *canvas.Client, logger *slog.Logger) *Syncer {
 	return &Syncer{client: client, logger: logger}
 }
 
+// enumeration is what one course's discovery pass found, plus enough signal to
+// tell "this course genuinely has no files" apart from "every lookup failed".
+type enumeration struct {
+	candidates  []candidate
+	folders     map[int]string
+	warnings    []string
+	authExpired bool
+	sourcesOK   int
+}
+
 // candidate is one file discovered by any enumeration source.
 type candidate struct {
 	file     canvas.File
@@ -133,13 +143,30 @@ func (s *Syncer) Run(ctx context.Context, opts Options) (*Result, error) {
 	for _, course := range courses {
 		cr := CourseResult{CourseID: course.ID, CourseName: course.Name}
 
-		cands, folders, warnings := s.enumerate(ctx, course.ID)
-		cr.Warnings = warnings
-		cr.Found = len(cands)
+		en := s.enumerate(ctx, course.ID)
+		if en.authExpired {
+			// Caught mid-run: the course list succeeded but the session died
+			// before the files were read. Reporting a clean run here is the
+			// failure that makes a scheduled archiver worthless.
+			return nil, fmt.Errorf("%w (while reading %s)", ErrAuthExpired, course.Name)
+		}
+		cr.Warnings = en.warnings
+		cr.Found = len(en.candidates)
 
-		plans := make([]plan, 0, len(cands))
-		for _, c := range cands {
-			p, skip, reason := s.planFile(course, dirNames[course.ID], folders, c, manifest, opts, taken)
+		if en.sourcesOK == 0 {
+			// Every discovery source errored, so "0 files" is not a fact about
+			// the course. Count it as a failure so the run exits non-zero.
+			cr.Failed++
+			result.Failed++
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("%s: every file source failed; course not archived", course.Name))
+			result.Courses = append(result.Courses, cr)
+			continue
+		}
+
+		plans := make([]plan, 0, len(en.candidates))
+		for _, c := range en.candidates {
+			p, skip, reason := s.planFile(course, dirNames[course.ID], en.folders, c, manifest, opts, taken)
 			if skip {
 				cr.Skipped++
 				result.Skipped++
@@ -154,7 +181,7 @@ func (s *Syncer) Run(ctx context.Context, opts Options) (*Result, error) {
 				continue
 			}
 			takenMu.Lock()
-			taken[p.rel] = c.file.ID
+			taken[pathKey(p.rel)] = c.file.ID
 			takenMu.Unlock()
 			plans = append(plans, p)
 		}
@@ -217,48 +244,82 @@ func (s *Syncer) selectCourses(ctx context.Context, want []int) ([]canvas.Course
 // instances frequently disable the Files tab, in which case /files 403s and the
 // materials are only reachable through module items — so a single source is not
 // enough to call the archive complete.
-func (s *Syncer) enumerate(ctx context.Context, courseID int) ([]candidate, map[int]string, []string) {
-	var warnings []string
+func (s *Syncer) enumerate(ctx context.Context, courseID int) enumeration {
+	en := enumeration{folders: make(map[int]string)}
 	seen := make(map[int]bool)
-	var out []candidate
 
 	add := func(f canvas.File, source, hint string) {
 		if f.ID == 0 || seen[f.ID] {
 			return
 		}
 		seen[f.ID] = true
-		out = append(out, candidate{file: f, source: source, pathHint: hint})
+		en.candidates = append(en.candidates, candidate{file: f, source: source, pathHint: hint})
 	}
 
-	folderPaths := make(map[int]string)
+	// note records a source's outcome. An expired credential is fatal to the
+	// whole run; a 403 only means this source is closed, so keep going.
+	note := func(label string, err error) bool {
+		if err == nil {
+			en.sourcesOK++
+			return true
+		}
+		if canvas.IsAuthExpired(err) {
+			en.authExpired = true
+		}
+		en.warnings = append(en.warnings, fmt.Sprintf("%s unavailable (%v)", label, shortErr(err)))
+		return false
+	}
+
 	if folders, err := s.client.GetFolders(ctx, courseID); err != nil {
-		warnings = append(warnings, fmt.Sprintf("folders unavailable (%v)", shortErr(err)))
+		// Auxiliary: folders only affect where files land, not whether they
+		// are found, so this does not count toward sourcesOK.
+		if canvas.IsAuthExpired(err) {
+			en.authExpired = true
+		}
+		en.warnings = append(en.warnings, fmt.Sprintf("folders unavailable (%v)", shortErr(err)))
 	} else {
 		for _, f := range folders {
-			folderPaths[f.ID] = folderRelPath(f.FullName)
+			en.folders[f.ID] = folderRelPath(f.FullName)
 		}
 	}
 
-	if files, err := s.client.GetFiles(ctx, courseID); err != nil {
-		warnings = append(warnings, fmt.Sprintf("files tab unavailable (%v)", shortErr(err)))
-	} else {
+	files, err := s.client.GetFiles(ctx, courseID)
+	if note("files tab", err) {
 		for _, f := range files {
 			add(f, "files", "")
 		}
 	}
 
-	if modules, err := s.client.GetModules(ctx, courseID); err != nil {
-		warnings = append(warnings, fmt.Sprintf("modules unavailable (%v)", shortErr(err)))
-	} else {
+	modules, err := s.client.GetModules(ctx, courseID)
+	if note("modules", err) {
 		for _, m := range modules {
+			items := m.Items
+			if len(items) == 0 {
+				// Canvas omits inline items for large modules; fetch them.
+				fetched, err := s.client.GetModuleItems(ctx, courseID, m.ID)
+				if err != nil {
+					if canvas.IsAuthExpired(err) {
+						en.authExpired = true
+					}
+					en.warnings = append(en.warnings,
+						fmt.Sprintf("module %q items unavailable (%v)", m.Name, shortErr(err)))
+					continue
+				}
+				items = fetched
+			}
+
 			hint := path.Join("_modules", sanitizeSegment(m.Name))
-			for _, item := range m.Items {
+			for _, item := range items {
 				if !strings.EqualFold(item.Type, "File") || item.ContentID == 0 || seen[item.ContentID] {
 					continue
 				}
 				f, err := s.client.GetFile(ctx, courseID, item.ContentID)
 				if err != nil {
-					warnings = append(warnings, fmt.Sprintf("module file %d unavailable (%v)", item.ContentID, shortErr(err)))
+					if canvas.IsAuthExpired(err) {
+						en.authExpired = true
+					}
+					en.warnings = append(en.warnings,
+						fmt.Sprintf("module file %d unavailable (%v)", item.ContentID, shortErr(err)))
 					continue
 				}
 				if f.DisplayName == "" && item.Title != "" {
@@ -269,7 +330,7 @@ func (s *Syncer) enumerate(ctx context.Context, courseID int) ([]candidate, map[
 		}
 	}
 
-	for id := range s.embeddedFileIDs(ctx, courseID, &warnings) {
+	for id := range s.embeddedFileIDs(ctx, courseID, note) {
 		if seen[id] {
 			continue
 		}
@@ -280,12 +341,12 @@ func (s *Syncer) enumerate(ctx context.Context, courseID int) ([]candidate, map[
 		add(*f, "attachment", "_attachments")
 	}
 
-	sort.Slice(out, func(i, j int) bool { return out[i].file.ID < out[j].file.ID })
-	return out, folderPaths, warnings
+	sort.Slice(en.candidates, func(i, j int) bool { return en.candidates[i].file.ID < en.candidates[j].file.ID })
+	return en
 }
 
 // embeddedFileIDs scrapes assignment and announcement bodies for file links.
-func (s *Syncer) embeddedFileIDs(ctx context.Context, courseID int, warnings *[]string) map[int]bool {
+func (s *Syncer) embeddedFileIDs(ctx context.Context, courseID int, note func(string, error) bool) map[int]bool {
 	ids := make(map[int]bool)
 
 	collect := func(html string) {
@@ -296,17 +357,15 @@ func (s *Syncer) embeddedFileIDs(ctx context.Context, courseID int, warnings *[]
 		}
 	}
 
-	if assignments, err := s.client.GetAssignments(ctx, courseID); err != nil {
-		*warnings = append(*warnings, fmt.Sprintf("assignments unavailable (%v)", shortErr(err)))
-	} else {
+	assignments, err := s.client.GetAssignments(ctx, courseID)
+	if note("assignments", err) {
 		for _, a := range assignments {
 			collect(a.Description)
 		}
 	}
 
-	if anns, err := s.client.GetAnnouncements(ctx, []int{courseID}); err != nil {
-		*warnings = append(*warnings, fmt.Sprintf("announcements unavailable (%v)", shortErr(err)))
-	} else {
+	anns, err := s.client.GetAnnouncements(ctx, []int{courseID})
+	if note("announcements", err) {
 		for _, a := range anns {
 			collect(a.Message)
 		}
@@ -343,8 +402,8 @@ func (s *Syncer) planFile(
 	}
 
 	rel := path.Join(courseDir, sub, fileName(f))
-	if owner, ok := taken[rel]; ok && owner != f.ID {
-		rel = disambiguate(rel, f.ID)
+	if owner, ok := taken[pathKey(rel)]; ok && owner != f.ID {
+		rel = disambiguate(rel, f.ID, taken)
 	}
 
 	updated := false
