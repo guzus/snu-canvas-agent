@@ -720,6 +720,9 @@ func isVideo(f canvas.File) bool {
 	return strings.HasPrefix(ct, "video/") || strings.HasPrefix(ct, "audio/")
 }
 
+// ExpandDir resolves a configured archive path, including a leading "~/".
+func ExpandDir(dir string) (string, error) { return expandDir(dir) }
+
 func expandDir(dir string) (string, error) {
 	if strings.HasPrefix(dir, "~/") || dir == "~" {
 		home, err := os.UserHomeDir()

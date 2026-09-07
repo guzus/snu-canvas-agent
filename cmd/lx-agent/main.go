@@ -131,6 +131,8 @@ func main() {
 		handleSync(ctx, cfg, client, logger, cmdArgs)
 	case "notify-test":
 		handleNotifyTest(ctx, cfg, logger)
+	case "web":
+		handleWeb(cfg, logger, cmdArgs)
 	case "bot":
 		handleBot(cfg, client, logger)
 	case "serve":
@@ -661,6 +663,7 @@ Commands:
   files [course-id]
   announcements
   sync [--out DIR] [--course ID]... [--dry-run] [--include-videos] [--max-mb N] [--notify]
+  web [--listen host:port] [--dir DIR]
   notify-test
   bind-chat [chat-id]
   bot

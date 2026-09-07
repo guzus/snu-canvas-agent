@@ -1,0 +1,22 @@
+{{define "title"}}"{{.Query}}" 검색{{end}}
+{{define "content"}}
+<div class="crumb"><a href="/">← 전체 과목</a></div>
+<h1>“{{.Query}}” 검색 결과</h1>
+<div class="stats">{{len .Results}}개{{if ge (len .Results) 300}} (상위 300개만 표시){{end}}</div>
+
+{{if not .Results}}
+  <p class="empty">일치하는 파일이 없습니다.</p>
+{{end}}
+
+<ul class="files">
+  {{range .Results}}
+    <li><a href="/file/{{.ID}}">
+      <span class="ext">{{if .Ext}}{{.Ext}}{{else}}file{{end}}</span>
+      <span class="fname">{{.Name}}<br>
+        <span class="fsize">{{.Course}}{{if .Folder}} / {{.Folder}}{{end}}</span>
+      </span>
+      <span class="fsize">{{bytes .Size}}</span>
+    </a></li>
+  {{end}}
+</ul>
+{{end}}

@@ -1,0 +1,19 @@
+{{define "title"}}{{.Course.Name}}{{end}}
+{{define "content"}}
+<div class="crumb"><a href="/">← 전체 과목</a></div>
+<h1>{{.Course.Name}}</h1>
+<div class="stats">{{.Course.Count}}개 파일 · {{bytes .Course.Size}}</div>
+
+{{range .Course.Folders}}
+  {{if .Name}}<div class="folder"><code>{{.Name}}</code></div>{{end}}
+  <ul class="files">
+    {{range .Files}}
+      <li><a href="/file/{{.ID}}">
+        <span class="ext">{{if .Ext}}{{.Ext}}{{else}}file{{end}}</span>
+        <span class="fname">{{.Name}}</span>
+        <span class="fsize">{{bytes .Size}}</span>
+      </a></li>
+    {{end}}
+  </ul>
+{{end}}
+{{end}}

@@ -1,0 +1,21 @@
+{{define "title"}}LearningX 아카이브{{end}}
+{{define "content"}}
+<h1>보관된 강의 자료</h1>
+<div class="stats">
+  {{len .Snap.Courses}}개 과목 · {{.Snap.Count}}개 파일 · {{bytes .Snap.Size}}
+</div>
+
+{{if not .Snap.Courses}}
+  <p class="empty">아직 보관된 파일이 없습니다. <code>lx-agent sync</code>를 먼저 실행하세요.</p>
+{{end}}
+
+{{range .Snap.Terms}}
+  <h2 class="term">{{.Term}} · {{.Count}}개 · {{bytes .Size}}</h2>
+  {{range .Courses}}
+    <a class="card" href="/course/{{.ID}}">
+      <div class="name">{{.Name}}</div>
+      <div class="meta">{{.Count}}개 파일 · {{bytes .Size}}{{if not .Latest.IsZero}} · 최신 {{date .Latest}}{{end}}</div>
+    </a>
+  {{end}}
+{{end}}
+{{end}}

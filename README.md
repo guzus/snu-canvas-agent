@@ -6,6 +6,8 @@ Built for [서울대 Learning X](https://myetl.snu.ac.kr), compatible with Canva
 
 ## Features
 
+- **Web archive browser**: browse, search and open every archived file from any
+  device on the tailnet
 - **Archive sync**: mirror every course file to local disk on a schedule, so materials accumulate instead of being downloaded one at a time
 - New file / assignment / announcement monitoring
 - Deadline alerts (`D-3`, `D-1`, `D-Day`)
@@ -113,9 +115,17 @@ Both units are systemd **user** units, so they need lingering enabled
 of being skipped. `TimeoutStartSec=3h` caps a wedged run so it cannot block
 every later firing.
 
+The deploy installs two units: `lx-archive.timer` (the periodic sync) and
+`lx-web.service` (the browser, `Restart=always`). Both are enabled at boot.
+
 ```bash
 ssh gunux journalctl --user -u lx-archive.service -f
+ssh gunux tail -f .local/state/lx-agent/web.log
 ```
+
+Both write to files rather than relying on journald alone: it dropped another
+unit's entries wholesale on this host, which is why `dexlp-dash` carries the
+same workaround.
 
 Alerts route through hooker to a Telegram forum thread. The deploy renders
 `~/.config/lx-agent/env` **on the host** from the host's own
@@ -156,6 +166,32 @@ blocks in `open()` forever, waiting on a consent dialog no one will ever see —
 observed here as a job that ran 8 minutes using 0.03s of CPU with no network
 activity. The installer refuses such a path unless you grant the binary Full
 Disk Access and pass `ALLOW_TCC_DIR=1`.
+
+## Web browser
+
+```bash
+lx-agent web --listen 100.104.144.45:8788 --dir /ssd1/etl-archive
+```
+
+Server-rendered Go templates (`internal/web/templates/*.gohtml`, embedded in the
+binary — no assets to deploy). Courses grouped by semester newest-first, files
+grouped by their LMS folder, search across file/course/folder names, and files
+opening inline so a phone renders a PDF instead of downloading it (`?dl=1`
+forces a download).
+
+- **The listen address is the access control.** Bound to the host's Tailscale
+  address, the site answers on the tailnet and nowhere else. There is no login
+  in front of it and it serves personal coursework, so it must never be bound to
+  `0.0.0.0`. The deploy resolves the tailnet IP on the host rather than
+  hardcoding it, so a changed address does not silently expose or break it.
+- **Files are addressed by Canvas file ID, never by a path from the URL.** The
+  path comes from the manifest, so no request can name a file outside the
+  archive however it is encoded.
+- **Korean filenames survive the download.** The name goes in `filename*`
+  (RFC 5987) with an ASCII-stripped fallback in the legacy `filename` slot.
+- **The manifest is re-read when it changes on disk**, so files appear after a
+  sync without restarting the service.
+- Range requests work, so large PDFs seek instead of buffering.
 
 ## CLI Commands
 

@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{block "title" .}}LearningX 아카이브{{end}}</title>
+<style>
+:root {
+  --bg: #fbfaf8; --panel: #ffffff; --ink: #1b1a17; --muted: #6b675f;
+  --line: #e5e1d9; --accent: #8a5a2b; --accent-soft: #f2ece3;
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16151a; --panel: #1e1d23; --ink: #ece9e3; --muted: #9b968d;
+    --line: #302e37; --accent: #d9a441; --accent-soft: #2a2721;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
+        "Pretendard", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: inherit; text-decoration: none; }
+.wrap { max-width: 940px; margin: 0 auto; padding: 20px 16px 64px; }
+
+header.top {
+  border-bottom: 1px solid var(--line); background: var(--panel);
+  position: sticky; top: 0; z-index: 10;
+}
+header.top .inner {
+  max-width: 940px; margin: 0 auto; padding: 12px 16px;
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+}
+.brand { font-weight: 700; letter-spacing: -0.01em; white-space: nowrap; }
+.brand span { color: var(--accent); }
+form.search { flex: 1 1 220px; display: flex; gap: 6px; }
+form.search input {
+  flex: 1; min-width: 0; padding: 7px 11px; border-radius: var(--radius);
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  font-size: 14px; font-family: inherit;
+}
+form.search input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+form.search button {
+  padding: 7px 13px; border-radius: var(--radius); border: 1px solid var(--line);
+  background: var(--accent-soft); color: var(--ink); cursor: pointer;
+  font-size: 14px; font-family: inherit; white-space: nowrap;
+}
+
+.stats { color: var(--muted); font-size: 13px; margin: 14px 0 22px; }
+h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: -0.01em; }
+h2.term {
+  font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--muted); margin: 28px 0 10px; font-weight: 600;
+}
+.crumb { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+.crumb a { color: var(--accent); }
+
+.card {
+  display: block; background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 12px 14px; margin-bottom: 8px;
+}
+a.card:hover { border-color: var(--accent); }
+.card .name { font-weight: 600; }
+.card .meta { color: var(--muted); font-size: 13px; margin-top: 3px; }
+
+.folder { margin: 22px 0 8px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.folder code {
+  background: var(--accent-soft); padding: 2px 7px; border-radius: 6px;
+  font: inherit; color: var(--ink);
+}
+
+ul.files { list-style: none; margin: 0; padding: 0; }
+ul.files li { border-bottom: 1px solid var(--line); }
+ul.files li:last-child { border-bottom: 0; }
+ul.files a {
+  display: flex; gap: 10px; align-items: baseline; padding: 9px 2px;
+}
+ul.files a:hover .fname { color: var(--accent); }
+.ext {
+  flex: 0 0 auto; font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--muted); background: var(--accent-soft);
+  padding: 2px 6px; border-radius: 5px; min-width: 40px; text-align: center;
+}
+.fname { flex: 1 1 auto; min-width: 0; word-break: break-word; }
+.fsize { flex: 0 0 auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.empty { color: var(--muted); padding: 28px 0; text-align: center; }
+footer { margin-top: 40px; color: var(--muted); font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="inner">
+    <a class="brand" href="/">LearningX <span>아카이브</span></a>
+    <form class="search" action="/search" method="get" role="search">
+      <input type="search" name="q" placeholder="파일 · 과목 검색" value="{{.Query}}"
+             aria-label="검색" autocomplete="off">
+      <button type="submit">검색</button>
+    </form>
+  </div>
+</header>
+<div class="wrap">
+{{block "content" .}}{{end}}
+<footer>
+  {{.Snap.Count}}개 · {{bytes .Snap.Size}}
+  {{if not .Snap.SyncedAt.IsZero}}· 마지막 동기화 {{ago .Snap.SyncedAt}}{{end}}
+</footer>
+</div>
+</body>
+</html>

@@ -19,6 +19,10 @@ HOOKER_ENV="${HOOKER_ENV:-.config/hooker/env}"
 HOOKER_TOPIC="${HOOKER_TOPIC:-learningx}"
 HOOKER_CHAT_ID="${HOOKER_CHAT_ID:--1003805075491}"
 HOOKER_MESSAGE_THREAD_ID="${HOOKER_MESSAGE_THREAD_ID:-200238}"
+
+# Web UI. The port binds to the host's Tailscale address, resolved on the host
+# rather than hardcoded here so a changed tailnet IP does not silently break it.
+WEB_PORT="${WEB_PORT:-8788}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONFIG="${CONFIG:-$REPO_ROOT/config.yaml}"
 
@@ -35,16 +39,18 @@ ssh_() { ssh -o BatchMode=yes "$HOST" "export XDG_RUNTIME_DIR=/run/user/\$(id -u
 
 case "${1:-}" in
 --uninstall)
-  say "removing timer and service from $HOST"
+  say "removing units from $HOST"
   ssh_ "systemctl --user disable --now lx-archive.timer 2>/dev/null || true;
-        rm -f ~/$UNIT_DIR/lx-archive.timer ~/$UNIT_DIR/lx-archive.service;
+        systemctl --user disable --now lx-web.service 2>/dev/null || true;
+        rm -f ~/$UNIT_DIR/lx-archive.timer ~/$UNIT_DIR/lx-archive.service ~/$UNIT_DIR/lx-web.service;
         systemctl --user daemon-reload"
   echo "uninstalled (binary, config and archive left in place)"
   exit 0
   ;;
 --status)
   ssh_ "systemctl --user list-timers lx-archive.timer --no-pager;
-        echo; systemctl --user status lx-archive.service --no-pager -n 20 || true"
+        echo; systemctl --user status lx-archive.service --no-pager -n 12 || true;
+        echo; systemctl --user status lx-web.service --no-pager -n 8 || true"
   exit 0
   ;;
 --run)
@@ -147,7 +153,21 @@ if ! ssh_ "loginctl show-user \$(whoami) 2>/dev/null | grep -q 'Linger=yes'"; th
     fail "could not enable linger; run: sudo loginctl enable-linger \$(whoami)"
 fi
 
-ssh_ "systemctl --user daemon-reload && systemctl --user enable --now lx-archive.timer"
+# Resolve the tailnet address on the host. Binding 0.0.0.0 would expose the
+# archive on every interface; binding a hardcoded IP breaks when it changes.
+TS_IP="$(ssh_ "tailscale ip -4 2>/dev/null | head -1" | tr -d '\r')"
+[[ -n "$TS_IP" ]] || fail "could not resolve $HOST's tailscale IP; is tailscale up?"
+LISTEN="$TS_IP:$WEB_PORT"
+
+ssh_ "mkdir -p ~/.local/state/lx-agent"
+sed -e "s|__LISTEN__|$LISTEN|g" -e "s|__ARCHIVE_DIR__|$ARCHIVE_DIR|g" \
+  "$REPO_ROOT/deploy/gunux/lx-web.service.template" \
+  | ssh -o BatchMode=yes "$HOST" "cat > ~/$UNIT_DIR/lx-web.service"
+
+ssh_ "systemctl --user daemon-reload &&
+      systemctl --user enable --now lx-archive.timer &&
+      systemctl --user enable lx-web.service &&
+      systemctl --user restart lx-web.service"
 
 # --- verify -----------------------------------------------------------------
 say "verifying credentials on $HOST"
@@ -163,6 +183,7 @@ cat <<MSG
   config   : ~/$REMOTE_CFG (0600)
   archive  : $ARCHIVE_DIR
   schedule : $ONCALENDAR (Persistent=true, catches up after downtime)
+  web      : http://$LISTEN  (tailnet only)
 
   run now  : $0 --run
   status   : $0 --status

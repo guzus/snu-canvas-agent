@@ -1,0 +1,24 @@
+[Unit]
+Description=LearningX archive browser (course files over the tailnet)
+Documentation=https://github.com/guzus/snu-canvas-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# The listen address IS the access control: bound to this host's Tailscale
+# address, the site answers on the tailnet and nowhere else — not the LAN, not
+# the public interface. There is no login in front of it, and it serves a
+# student's own coursework.
+ExecStart=%h/.local/bin/lx-agent -config %h/.config/lx-agent/config.yaml web \
+    --listen __LISTEN__ --dir __ARCHIVE_DIR__
+
+Restart=always
+RestartSec=10
+
+# journald dropped another unit's entries wholesale on this host, so append to
+# a file it cannot vacuum. See dexlp-dash.service.d for the original scar.
+StandardOutput=append:%h/.local/state/lx-agent/web.log
+StandardError=append:%h/.local/state/lx-agent/web.log
+
+[Install]
+WantedBy=default.target
