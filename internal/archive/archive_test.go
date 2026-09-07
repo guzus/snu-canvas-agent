@@ -27,6 +27,8 @@ type fakeCanvas struct {
 	perCourseStatus       int // status returned by every per-course endpoint
 	omitInlineModuleItems bool
 	secondCourseExpired   bool
+	noFilesTab            bool
+	emptyEverything       bool
 	extraFiles            []map[string]any
 }
 
@@ -73,6 +75,10 @@ func newFakeCanvas(t *testing.T, filesTabOK bool) *fakeCanvas {
 			fmt.Fprint(w, `{"status":"unauthorized","errors":[{"message":"disabled"}]}`)
 			return
 		}
+		if f.emptyEverything {
+			writeJSON(w, []map[string]any{})
+			return
+		}
 		out := []map[string]any{fileJSON(11, "1주차 09/01 개요.pdf", 3, f.server.URL)}
 		for _, e := range f.extraFiles {
 			c := map[string]any{}
@@ -103,6 +109,10 @@ func newFakeCanvas(t *testing.T, filesTabOK bool) *fakeCanvas {
 
 	mux.HandleFunc("/api/v1/courses/101/modules", func(w http.ResponseWriter, r *http.Request) {
 		if !gate(w) {
+			return
+		}
+		if f.emptyEverything {
+			writeJSON(w, []map[string]any{})
 			return
 		}
 		m := map[string]any{"id": 1, "name": "Week 1"}
@@ -140,8 +150,23 @@ func newFakeCanvas(t *testing.T, filesTabOK bool) *fakeCanvas {
 		}
 	})
 
+	mux.HandleFunc("/api/v1/courses/101/tabs", func(w http.ResponseWriter, r *http.Request) {
+		tabs := []map[string]any{
+			{"id": "home", "label": "홈", "type": "internal"},
+			{"id": "context_external_tool_83", "label": "주차학습", "type": "external"},
+		}
+		if !f.noFilesTab {
+			tabs = append(tabs, map[string]any{"id": "files", "label": "파일", "type": "internal"})
+		}
+		writeJSON(w, tabs)
+	})
+
 	mux.HandleFunc("/api/v1/courses/101/assignments", func(w http.ResponseWriter, r *http.Request) {
 		if !gate(w) {
+			return
+		}
+		if f.emptyEverything {
+			writeJSON(w, []map[string]any{})
 			return
 		}
 		writeJSON(w, []map[string]any{
@@ -507,5 +532,42 @@ func TestManifestSurvivesMidRunAuthExpiry(t *testing.T) {
 	}
 	if got := atomic.LoadInt64(&f.downloadCount); got != before {
 		t.Fatalf("download count grew from %d to %d", before, got)
+	}
+}
+
+// SNU courses with the Files tab removed answer /files with 200 and an empty
+// array, so an empty course must be explained rather than reported as a clean
+// archive of nothing.
+func TestEmptyCourseWithoutFilesTabIsReportedUnreachable(t *testing.T) {
+	f := newFakeCanvas(t, true)
+	f.noFilesTab = true
+	f.emptyEverything = true
+
+	res, err := newSyncer(f).Run(context.Background(), Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(res.Unreachable) != 1 {
+		t.Fatalf("Unreachable = %v, want one entry explaining the empty course", res.Unreachable)
+	}
+	if !strings.Contains(res.Unreachable[0], "주차학습") {
+		t.Fatalf("explanation should name the LTI tool holding the materials: %q", res.Unreachable[0])
+	}
+	if !strings.Contains(res.Summary(), "not archivable via the Canvas API") {
+		t.Fatal("summary hides the gap")
+	}
+}
+
+// A course that is genuinely empty but still exposes its Files tab is not a gap.
+func TestGenuinelyEmptyCourseIsNotFlagged(t *testing.T) {
+	f := newFakeCanvas(t, true)
+	f.emptyEverything = true
+
+	res, err := newSyncer(f).Run(context.Background(), Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(res.Unreachable) != 0 {
+		t.Fatalf("Unreachable = %v, want none", res.Unreachable)
 	}
 }

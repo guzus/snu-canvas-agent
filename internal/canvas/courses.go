@@ -34,3 +34,35 @@ func (c *Client) GetCourse(ctx context.Context, courseID int) (*Course, error) {
 	err := c.getAll(ctx, fmt.Sprintf("/courses/%d", courseID), nil, &course)
 	return &course, err
 }
+
+// Tab is a course navigation tab. External tabs are LTI tools (LearningX
+// 주차학습, 강의/출결), whose content is not exposed through the Canvas API.
+type Tab struct {
+	ID      string `json:"id"`
+	Label   string `json:"label"`
+	Type    string `json:"type"`
+	HTMLURL string `json:"html_url"`
+}
+
+// GetTabs lists a course's navigation tabs. Used to explain an empty course:
+// SNU courses with the Files tab removed answer /files with 200 and an empty
+// array rather than 403, so nothing else distinguishes "no materials" from
+// "materials live behind an LTI tool this API cannot see".
+func (c *Client) GetTabs(ctx context.Context, courseID int) ([]Tab, error) {
+	params := url.Values{"per_page": {"50"}}
+
+	raw, err := c.getPaginated(ctx, fmt.Sprintf("/courses/%d/tabs", courseID), params)
+	if err != nil {
+		return nil, err
+	}
+
+	var tabs []Tab
+	for _, r := range raw {
+		var t Tab
+		if err := json.Unmarshal(r, &t); err != nil {
+			continue
+		}
+		tabs = append(tabs, t)
+	}
+	return tabs, nil
+}

@@ -66,6 +66,7 @@ type Result struct {
 	SkippedTooBig int
 	SkippedVideo  int
 	Bytes         int64
+	Unreachable   []string // courses whose materials the Canvas API cannot see
 	Errors        []string
 	Duration      time.Duration
 }
@@ -175,6 +176,17 @@ func (s *Syncer) Run(ctx context.Context, opts Options) (*Result, error) {
 				fmt.Sprintf("%s: every file source failed; course not archived", course.Name))
 			result.Courses = append(result.Courses, cr)
 			continue
+		}
+
+		if len(en.candidates) == 0 {
+			// A course with its Files tab removed answers /files with 200 and
+			// an empty array, not 403 — so without this, "found 0" is
+			// indistinguishable from "archived successfully".
+			if why := s.explainEmptyCourse(ctx, course.ID); why != "" {
+				cr.Warnings = append(cr.Warnings, why)
+				result.Unreachable = append(result.Unreachable,
+					fmt.Sprintf("%s — %s", course.Name, why))
+			}
 		}
 
 		plans := make([]plan, 0, len(en.candidates))
@@ -386,6 +398,35 @@ func (s *Syncer) embeddedFileIDs(ctx context.Context, courseID int, note func(st
 	}
 
 	return ids
+}
+
+// explainEmptyCourse reports why a course yielded nothing, naming the LTI tools
+// that likely hold its materials so the gap is visible rather than silent.
+func (s *Syncer) explainEmptyCourse(ctx context.Context, courseID int) string {
+	tabs, err := s.client.GetTabs(ctx, courseID)
+	if err != nil {
+		return "no files found and the tab list is unreadable"
+	}
+
+	hasFilesTab := false
+	var external []string
+	for _, t := range tabs {
+		if t.ID == "files" {
+			hasFilesTab = true
+		}
+		if t.Type == "external" && t.Label != "" {
+			external = append(external, t.Label)
+		}
+	}
+
+	if hasFilesTab {
+		return "" // the Files tab is present and genuinely empty
+	}
+	if len(external) > 0 {
+		return fmt.Sprintf("no Files tab; materials may live behind LTI tools the Canvas API cannot read (%s)",
+			strings.Join(external, ", "))
+	}
+	return "no Files tab and no files reachable through modules or attachments"
 }
 
 // planFile decides the destination path and whether the file needs fetching.
@@ -662,6 +703,12 @@ func (r *Result) Summary() string {
 	for _, c := range r.Courses {
 		fmt.Fprintf(&b, "  %-45s found %3d  new %3d  failed %d\n",
 			truncateName(c.CourseName, 45), c.Found, c.Downloaded, c.Failed)
+	}
+	if len(r.Unreachable) > 0 {
+		b.WriteString("not archivable via the Canvas API:\n")
+		for _, u := range r.Unreachable {
+			fmt.Fprintf(&b, "  - %s\n", u)
+		}
 	}
 	if len(r.Errors) > 0 {
 		b.WriteString("warnings:\n")
