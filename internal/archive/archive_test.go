@@ -693,3 +693,139 @@ func TestLegacyCollidingManifestSelfHeals(t *testing.T) {
 		t.Fatalf("archive still churning after repair: %d", res.Downloaded)
 	}
 }
+
+// A manifest path recorded in a non-NFC form must be normalized and the file
+// renamed to match, so the archive survives a move to a filesystem that
+// compares names byte-for-byte instead of ignoring normalization.
+func TestLegacyNonNFCPathIsMigrated(t *testing.T) {
+	nfcName := "착한 나.pdf"
+	nfdName := norm.NFD.String(nfcName)
+
+	f := newFakeCanvas(t, true)
+	f.extraFiles = []map[string]any{fileJSONSized(51, nfcName, 3, "", 8)}
+	dir := t.TempDir()
+
+	course := "자료구조 (2026-1)"
+	oldRel := course + "/1주차/" + nfdName
+
+	// Seed the pre-migration state: file on disk under the NFD name, manifest
+	// pointing at it.
+	abs := filepath.Join(dir, filepath.FromSlash(oldRel))
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(abs, []byte("PDFBYTES"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManifest(dir)
+	m.Put(51, Entry{
+		CourseID: 101, CourseName: course, RelPath: oldRel,
+		Size: 8, UpdatedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
+	})
+	if err := m.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	before := atomic.LoadInt64(&f.downloadCount)
+	res, err := newSyncer(f).Run(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	healed := NewManifest(dir)
+	if err := healed.Load(); err != nil {
+		t.Fatal(err)
+	}
+	e, _ := healed.Get(51)
+	if !norm.NFC.IsNormalString(e.RelPath) {
+		t.Fatalf("manifest path not normalized: %q", e.RelPath)
+	}
+
+	// The migration must not cost a download of this file, and must leave one
+	// copy of it rather than an NFC and an NFD sibling.
+	for _, n := range res.New {
+		if norm.NFC.String(n.Display) == nfcName {
+			t.Fatalf("migration re-downloaded the migrated file: %+v", n)
+		}
+	}
+	_ = before
+
+	entries, err := os.ReadDir(filepath.Dir(abs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var copies []string
+	for _, en := range entries {
+		if norm.NFC.String(en.Name()) == nfcName {
+			copies = append(copies, en.Name())
+		}
+	}
+	if len(copies) != 1 {
+		t.Fatalf("expected one copy after migration, found %d: %q", len(copies), copies)
+	}
+	if !norm.NFC.IsNormalString(copies[0]) {
+		t.Fatalf("file on disk still not NFC: %q", copies[0])
+	}
+}
+
+// The byte-exact case: a host that received both spellings (an rsync rewrote
+// the name in transit) must end up with one file, not a permanent duplicate.
+func TestDenormalizedDuplicateIsRemoved(t *testing.T) {
+	nfcName := "착한 나.pdf"
+	nfdName := norm.NFD.String(nfcName)
+
+	f := newFakeCanvas(t, true)
+	f.extraFiles = []map[string]any{fileJSONSized(52, nfcName, 3, "", 8)}
+	dir := t.TempDir()
+
+	course := "자료구조 (2026-1)"
+	oldRel := course + "/1주차/" + nfdName
+	newRel := course + "/1주차/" + nfcName
+	oldAbs := filepath.Join(dir, filepath.FromSlash(oldRel))
+	newAbs := filepath.Join(dir, filepath.FromSlash(newRel))
+
+	if err := os.MkdirAll(filepath.Dir(oldAbs), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{oldAbs, newAbs} {
+		if err := os.WriteFile(p, []byte("PDFBYTES"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// On a normalization-insensitive filesystem these are one file and this
+	// scenario cannot arise; skip rather than assert the wrong thing.
+	oi, _ := os.Stat(oldAbs)
+	ni, _ := os.Stat(newAbs)
+	if os.SameFile(oi, ni) {
+		t.Skip("filesystem is normalization-insensitive; case not reachable here")
+	}
+
+	m := NewManifest(dir)
+	m.Put(52, Entry{
+		CourseID: 101, CourseName: course, RelPath: oldRel,
+		Size: 8, UpdatedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
+	})
+	if err := m.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := newSyncer(f).Run(context.Background(), Options{Dir: dir}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if _, err := os.Stat(oldAbs); err == nil {
+		t.Fatal("denormalized duplicate still present")
+	}
+	if _, err := os.Stat(newAbs); err != nil {
+		t.Fatalf("normalized file missing: %v", err)
+	}
+
+	healed := NewManifest(dir)
+	if err := healed.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := healed.Get(52); e.RelPath != newRel {
+		t.Fatalf("manifest path = %q, want %q", e.RelPath, newRel)
+	}
+}

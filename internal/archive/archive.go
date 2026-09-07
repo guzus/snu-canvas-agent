@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/mgnlia/lx-agent/internal/canvas"
+	"golang.org/x/text/unicode/norm"
 )
 
 // ErrAuthExpired signals that the Canvas credential is dead. A scheduled run
@@ -463,6 +464,7 @@ func (s *Syncer) planFile(
 
 	updated := false
 	if prev, ok := manifest.Get(f.ID); ok {
+		prev = s.migrateToNFC(opts.Dir, f.ID, prev, manifest)
 		// Keep the path it was first archived at — unless another file now
 		// holds that path on disk. Entries written before normalization-aware
 		// keying can collide this way; reusing the path would keep the two
@@ -485,6 +487,70 @@ func (s *Syncer) planFile(
 		source:     c.source,
 		updated:    updated,
 	}, false, ""
+}
+
+// migrateToNFC rewrites a manifest path that is not NFC-normalized, renaming
+// the file on disk to match.
+//
+// Paths recorded before names were normalized keep whatever form Canvas served.
+// That is portable on macOS, where the filesystem ignores normalization, but
+// not off it: rsyncing the archive to an ext4 host rewrote one such name in
+// transit, so the recorded path no longer resolved and the file was fetched a
+// second time — leaving two copies of it. Normalizing on sight makes the
+// archive transplantable instead of subtly host-specific.
+func (s *Syncer) migrateToNFC(dir string, fileID int, prev Entry, manifest *Manifest) Entry {
+	nfc := norm.NFC.String(prev.RelPath)
+	if nfc == prev.RelPath {
+		return prev
+	}
+
+	oldAbs := filepath.Join(dir, filepath.FromSlash(prev.RelPath))
+	newAbs := filepath.Join(dir, filepath.FromSlash(nfc))
+
+	oldInfo, oldErr := os.Stat(oldAbs)
+	newInfo, newErr := os.Stat(newAbs)
+
+	switch {
+	case oldErr == nil && newErr == nil && os.SameFile(oldInfo, newInfo):
+		// One file answering to two spellings — a normalization-insensitive
+		// filesystem such as APFS. Renaming straight to the target is a no-op
+		// there, so go through a temporary name to force the stored bytes to
+		// NFC. Without this the archive stays macOS-shaped and breaks again
+		// the next time it is copied to a byte-exact filesystem.
+		tmp := newAbs + ".nfc-migrate"
+		if err := os.Rename(oldAbs, tmp); err != nil {
+			s.logger.Warn("normalize archived path", "path", prev.RelPath, "err", err)
+			return prev
+		}
+		if err := os.Rename(tmp, newAbs); err != nil {
+			s.logger.Warn("normalize archived path", "path", prev.RelPath, "err", err)
+			_ = os.Rename(tmp, oldAbs)
+			return prev
+		}
+
+	case oldErr == nil && newErr == nil:
+		// Two distinct files: a byte-exact filesystem that received both
+		// spellings, e.g. after an rsync that rewrote the name in transit.
+		// Adopt the normalized one and drop the stale twin, but only when it
+		// is the copy this entry recorded.
+		if oldInfo.Size() == prev.Size && newInfo.Size() == prev.Size {
+			if err := os.Remove(oldAbs); err != nil {
+				s.logger.Warn("remove denormalized duplicate", "path", prev.RelPath, "err", err)
+			} else {
+				s.logger.Info("removed denormalized duplicate", "path", prev.RelPath)
+			}
+		}
+
+	case oldErr == nil:
+		if err := os.Rename(oldAbs, newAbs); err != nil {
+			s.logger.Warn("normalize archived path", "path", prev.RelPath, "err", err)
+			return prev
+		}
+	}
+
+	prev.RelPath = nfc
+	manifest.Put(fileID, prev)
+	return prev
 }
 
 // needsRefresh re-downloads only when Canvas reports a different revision or
