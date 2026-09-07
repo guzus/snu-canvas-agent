@@ -60,7 +60,7 @@ go run ./cmd/lx-agent sync --notify      # download + Telegram summary
 Layout on disk:
 
 ```
-~/Documents/etl-archive/
+~/etl-archive/
 ├── archive-manifest.json          # file-ID → path index (do not delete)
 ├── 자료구조 (2026-1)/
 │   ├── 1주차/…                    # mirrors the LMS folder tree
@@ -98,6 +98,13 @@ The installer builds a real binary to `~/.local/bin/lx-agent`, verifies auth
 with a live `courses` call before scheduling anything, and loads
 `xyz.guzus.lx-archive`. It uses `StartInterval` rather than a calendar time:
 a sleeping laptop misses a calendar firing but catches an interval on wake.
+
+**Keep the archive out of `~/Documents`, `~/Desktop` and `~/Downloads.**
+macOS TCC gates those folders, and a headless launchd job that touches one
+blocks in `open()` forever, waiting on a consent dialog no one will ever see —
+observed here as a job that ran 8 minutes using 0.03s of CPU with no network
+activity. The installer refuses such a path unless you grant the binary Full
+Disk Access and pass `ALLOW_TCC_DIR=1`.
 
 ```bash
 launchctl kickstart -p gui/$(id -u)/xyz.guzus.lx-archive   # run now

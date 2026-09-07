@@ -12,7 +12,11 @@ monitor:
   # courses: [12345, 67890]          # Filter specific course IDs (empty = all)
 
 archive:
-  dir: "~/Documents/etl-archive"     # Where `lx-agent sync` stacks course files
+  dir: "~/etl-archive"               # Where `lx-agent sync` stacks course files.
+                                     # Keep this OUT of ~/Documents, ~/Desktop and
+                                     # ~/Downloads: macOS TCC makes a headless
+                                     # launchd job block forever in open() waiting
+                                     # for a consent dialog nobody will ever see.
   max_file_mb: 0                     # Skip files larger than this (0 = no limit)
   include_videos: false              # Lecture video/audio files are big; opt in explicitly
   concurrency: 3                     # Parallel downloads

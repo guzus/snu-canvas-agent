@@ -541,7 +541,7 @@ func applyDefaults(cfg *config) {
 		cfg.Notifier.Provider = "stdout"
 	}
 	if cfg.Archive.Dir == "" {
-		cfg.Archive.Dir = "~/Documents/etl-archive"
+		cfg.Archive.Dir = "~/etl-archive"
 	}
 	if cfg.Archive.Concurrency <= 0 {
 		cfg.Archive.Concurrency = 3
