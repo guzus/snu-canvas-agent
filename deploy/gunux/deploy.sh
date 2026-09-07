@@ -23,6 +23,10 @@ HOOKER_MESSAGE_THREAD_ID="${HOOKER_MESSAGE_THREAD_ID:-200238}"
 # Web UI. The port binds to the host's Tailscale address, resolved on the host
 # rather than hardcoded here so a changed tailnet IP does not silently break it.
 WEB_PORT="${WEB_PORT:-8788}"
+
+# Model CLI used to summarise what a run added, for the hooker notification.
+# Absolute: systemd units get a minimal PATH that will not find it.
+SUMMARY_BIN="${SUMMARY_BIN:-.local/bin/grok -p}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONFIG="${CONFIG:-$REPO_ROOT/config.yaml}"
 
@@ -119,22 +123,30 @@ if [[ "$SEED" == "1" ]]; then
 fi
 
 # --- notifier env ------------------------------------------------------------
+# Values are single-quoted: systemd strips matching quotes, and without them a
+# value containing a space (the summary command) is executed as a command by any
+# shell that sources this file — which the notify-test instructions do.
+#
 # The hooker credentials are rendered on the host from the host's own env file,
 # so they never transit this machine. It also has to be rewritten rather than
 # pointed at: ~/.config/hooker/env uses `export VAR=...`, which systemd's
 # EnvironmentFile does not understand — it would parse the name as "export VAR".
 say "writing notifier env on $HOST"
+summary_bin_path="${SUMMARY_BIN%% *}"
+ssh_ "test -x ~/$summary_bin_path" \
+  || echo "  note: ~/$summary_bin_path not executable on $HOST; runs will send the plain file list"
 ssh_ "test -f ~/$HOOKER_ENV" \
   || fail "~/$HOOKER_ENV not found on $HOST; set HOOKER_ENV= to the right path"
 ssh_ "set -a; . ~/$HOOKER_ENV; set +a;
       : \"\${HOOKER_URL:?HOOKER_URL missing in ~/$HOOKER_ENV}\";
       umask 077;
       {
-        printf 'HOOKER_URL=%s\n' \"\$HOOKER_URL\";
-        printf 'HOOKER_API_KEY=%s\n' \"\$HOOKER_API_KEY\";
-        printf 'HOOKER_TOPIC=%s\n' '$HOOKER_TOPIC';
-        printf 'HOOKER_CHAT_ID=%s\n' '$HOOKER_CHAT_ID';
-        printf 'HOOKER_MESSAGE_THREAD_ID=%s\n' '$HOOKER_MESSAGE_THREAD_ID';
+        printf 'HOOKER_URL=%s\n' \"'\$HOOKER_URL'\";
+        printf 'HOOKER_API_KEY=%s\n' \"'\$HOOKER_API_KEY'\";
+        printf 'HOOKER_TOPIC=%s\n' \"'$HOOKER_TOPIC'\";
+        printf 'HOOKER_CHAT_ID=%s\n' \"'$HOOKER_CHAT_ID'\";
+        printf 'HOOKER_MESSAGE_THREAD_ID=%s\n' \"'$HOOKER_MESSAGE_THREAD_ID'\";
+        printf 'LX_SUMMARY_COMMAND=%s\n' \"'\$HOME/$SUMMARY_BIN'\";
       } > ~/.config/lx-agent/env.new && mv ~/.config/lx-agent/env.new ~/.config/lx-agent/env"
 
 # --- install units ----------------------------------------------------------

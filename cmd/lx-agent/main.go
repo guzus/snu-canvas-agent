@@ -51,6 +51,10 @@ type config struct {
 			MessageThreadID string `yaml:"message_thread_id"`
 		} `yaml:"hooker"`
 	} `yaml:"notifier"`
+	Summary struct {
+		Command string `yaml:"command"` // e.g. "grok -p"; empty disables
+		Timeout string `yaml:"timeout"`
+	} `yaml:"summary"`
 	Archive struct {
 		Dir           string `yaml:"dir"`
 		MaxFileMB     int64  `yaml:"max_file_mb"`
@@ -545,6 +549,9 @@ func applyEnvOverrides(cfg *config) {
 	if v := strings.TrimSpace(os.Getenv("ARCHIVE_DIR")); v != "" {
 		cfg.Archive.Dir = v
 	}
+	if v := strings.TrimSpace(os.Getenv("LX_SUMMARY_COMMAND")); v != "" {
+		cfg.Summary.Command = v
+	}
 	// Hooker credentials come from the host's own env file so they never have
 	// to be copied into this repo's config.
 	if v := strings.TrimSpace(os.Getenv("HOOKER_URL")); v != "" {
@@ -586,6 +593,9 @@ func applyDefaults(cfg *config) {
 	}
 	if cfg.Archive.Concurrency <= 0 {
 		cfg.Archive.Concurrency = 3
+	}
+	if cfg.Summary.Timeout == "" {
+		cfg.Summary.Timeout = "3m"
 	}
 }
 
@@ -662,7 +672,7 @@ Commands:
   assignments [course-id]
   files [course-id]
   announcements
-  sync [--out DIR] [--course ID]... [--dry-run] [--include-videos] [--max-mb N] [--notify]
+  sync [--out DIR] [--course ID]... [--dry-run] [--include-videos] [--max-mb N] [--no-syllabus] [--notify]
   web [--listen host:port] [--dir DIR]
   notify-test
   bind-chat [chat-id]

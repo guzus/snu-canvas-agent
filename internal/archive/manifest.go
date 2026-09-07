@@ -29,6 +29,9 @@ type Entry struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 	DownloadedAt time.Time `json:"downloaded_at"`
 	Source       string    `json:"source"`
+	// Checksum is set for artifacts with no upstream revision timestamp
+	// (syllabi), where content is the only way to detect a change.
+	Checksum string `json:"checksum,omitempty"`
 }
 
 // Manifest is the archive's index. It is deliberately separate from

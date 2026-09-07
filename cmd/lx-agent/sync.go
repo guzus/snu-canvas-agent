@@ -8,9 +8,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mgnlia/lx-agent/internal/archive"
 	"github.com/mgnlia/lx-agent/internal/canvas"
+	"github.com/mgnlia/lx-agent/internal/summarizer"
 )
 
 // handleSync mirrors every course file to local disk. It is the command the
@@ -68,6 +70,8 @@ func handleSync(ctx context.Context, cfg config, client *canvas.Client, logger *
 			opts.DryRun = true
 		case arg == "--include-videos":
 			opts.IncludeVideos = true
+		case arg == "--no-syllabus":
+			opts.SkipSyllabus = true
 		case arg == "--notify":
 			notify = true
 		default:
@@ -89,7 +93,11 @@ func handleSync(ctx context.Context, cfg config, client *canvas.Client, logger *
 	fmt.Print(result.Summary())
 
 	if notify {
-		if msg := syncNotification(result, opts.DryRun); msg != "" {
+		summary := ""
+		if timeout, err := time.ParseDuration(cfg.Summary.Timeout); err == nil {
+			summary = summarizeRun(ctx, summarizer.NewCLI(cfg.Summary.Command, timeout), result, logger)
+		}
+		if msg := syncNotification(result, opts.DryRun, summary); msg != "" {
 			alert(ctx, cfg, logger, msg)
 		}
 	}
@@ -101,7 +109,7 @@ func handleSync(ctx context.Context, cfg config, client *canvas.Client, logger *
 
 // syncNotification returns the Telegram message for a run, or "" when nothing
 // happened worth interrupting the user for.
-func syncNotification(r *archive.Result, dryRun bool) string {
+func syncNotification(r *archive.Result, dryRun bool, summary string) string {
 	if r.Downloaded == 0 && r.Failed == 0 {
 		return ""
 	}
@@ -111,19 +119,25 @@ func syncNotification(r *archive.Result, dryRun bool) string {
 	if dryRun {
 		verb = "저장 예정 (dry-run)"
 	}
-	fmt.Fprintf(&b, "📥 *LearningX 자료 %d개 %s*\n", r.Downloaded, verb)
+	fmt.Fprintf(&b, "📥 LearningX 자료 %d개 %s\n", r.Downloaded, verb)
 
-	const maxList = 15
-	for i, f := range r.New {
-		if i == maxList {
-			fmt.Fprintf(&b, "…외 %d개\n", len(r.New)-maxList)
-			break
+	// When the model summarized the run, its prose replaces the raw list: both
+	// would just be the same information twice on a phone screen.
+	if summary != "" {
+		b.WriteString("\n" + summary + "\n")
+	} else {
+		const maxList = 15
+		for i, f := range r.New {
+			if i == maxList {
+				fmt.Fprintf(&b, "…외 %d개\n", len(r.New)-maxList)
+				break
+			}
+			tag := ""
+			if f.Updated {
+				tag = " (갱신)"
+			}
+			fmt.Fprintf(&b, "• %s / %s%s\n", f.CourseName, f.Display, tag)
 		}
-		tag := ""
-		if f.Updated {
-			tag = " (갱신)"
-		}
-		fmt.Fprintf(&b, "• %s / %s%s\n", f.CourseName, f.Display, tag)
 	}
 
 	if r.Failed > 0 {

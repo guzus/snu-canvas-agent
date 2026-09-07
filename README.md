@@ -6,6 +6,10 @@ Built for [서울대 Learning X](https://myetl.snu.ac.kr), compatible with Canva
 
 ## Features
 
+- **강의계획서 (syllabus) archiving**: fetched from sugang.snu.ac.kr, which is
+  where SNU actually keeps them
+- **Run summaries**: an external model CLI describes what each run added, in the
+  notification
 - **Web archive browser**: browse, search and open every archived file from any
   device on the tailnet
 - **Archive sync**: mirror every course file to local disk on a schedule, so materials accumulate instead of being downloaded one at a time
@@ -89,6 +93,52 @@ Notes that matter in practice:
   non-zero instead of quietly archiving nothing. Routine "N files archived"
   notices go out at priority 3, so the one that needs action is not skimmed
   past with the ones that do not.
+
+### 강의계획서 (syllabi)
+
+Canvas holds no syllabus content for SNU courses: a course's `syllabus_body` is
+a shell wrapping an iframe into `sugang.snu.ac.kr`. Each run therefore resolves
+that reference and fetches the syllabus from sugang directly, writing to
+`<course>/강의계획서/`:
+
+- the instructor's uploaded document when there is one (PDF/HWP/DOCX),
+- `강의계획서.html` — a rendered document (course info, 교과목 개요, 평가 방법,
+  주차별 계획, 교재),
+- `강의계획서.json` — the raw record, so a field the renderer misses is still
+  recoverable.
+
+Measured across 20 courses: all 20 return syllabus data, only 7 attach a file.
+The rendered document is the *only* artifact for the other 13, which is why it
+is generated rather than just linked.
+
+Two details that are easy to get wrong:
+
+- **The shell page is not optional.** The data endpoint keys off session state
+  established by loading `cc103.action` first. Skipping it returns well-formed
+  JSON with every field blank — which reads as "this course has no syllabus"
+  rather than as an error.
+- Syllabi have no revision timestamp, so change detection is by content hash.
+
+Disable with `sync --no-syllabus` (for when sugang, not Canvas, is the thing
+that is down).
+
+### Run summaries
+
+Set `summary.command` (or `LX_SUMMARY_COMMAND`) to a single-turn model CLI and
+each notification carries a short Korean description of what was added instead
+of a raw file list:
+
+```yaml
+summary:
+  command: "~/.local/bin/grok -p"
+  timeout: "3m"
+```
+
+Strictly best-effort: if the command is missing, fails, times out, or prints
+nothing, the run sends the plain list. The prompt fences the file list as data,
+since the names come from SNU. The command runs in its own process group and is
+killed as a group on timeout — killing only the command leaves a child holding
+the stdout pipe, and the call then blocks past its deadline anyway.
 
 ### Schedule it (Linux host, recommended)
 

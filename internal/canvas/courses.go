@@ -66,3 +66,18 @@ func (c *Client) GetTabs(ctx context.Context, courseID int) ([]Tab, error) {
 	}
 	return tabs, nil
 }
+
+// GetSyllabusBody returns the course's syllabus HTML. On SNU myETL this is not
+// the syllabus itself but a wrapper around an iframe pointing at
+// sugang.snu.ac.kr, which is where the real 강의계획서 lives.
+func (c *Client) GetSyllabusBody(ctx context.Context, courseID int) (string, error) {
+	params := url.Values{"include[]": {"syllabus_body"}}
+
+	var course struct {
+		SyllabusBody string `json:"syllabus_body"`
+	}
+	if err := c.getAll(ctx, fmt.Sprintf("/courses/%d", courseID), params, &course); err != nil {
+		return "", err
+	}
+	return course.SyllabusBody, nil
+}

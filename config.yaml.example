@@ -11,6 +11,11 @@ monitor:
   state_path: "lx-state.json"        # State file for tracking seen items
   # courses: [12345, 67890]          # Filter specific course IDs (empty = all)
 
+summary:                             # optional: summarise each run's new files
+  command: ""                        # e.g. "~/.local/bin/grok -p" (LX_SUMMARY_COMMAND);
+                                     # empty disables and the plain file list is sent
+  timeout: "3m"
+
 archive:
   dir: "~/etl-archive"               # Where `lx-agent sync` stacks course files.
                                      # Keep this OUT of ~/Documents, ~/Desktop and
@@ -21,6 +26,8 @@ archive:
   include_videos: false              # Lecture video/audio files are big; opt in explicitly
   concurrency: 3                     # Parallel downloads
   # courses: [12345, 67890]          # Restrict the archive to these course IDs
+                                     # 강의계획서 is fetched too (sugang.snu.ac.kr);
+                                     # disable with `sync --no-syllabus`
 
 notifier:
   provider: "stdout"                 # stdout | hooker | telegram

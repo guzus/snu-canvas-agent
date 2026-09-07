@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/mgnlia/lx-agent/internal/canvas"
+	"github.com/mgnlia/lx-agent/internal/syllabus"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -33,6 +34,10 @@ type Options struct {
 	MaxFileBytes  int64 // 0 = no limit
 	IncludeVideos bool
 	Concurrency   int
+	// SkipSyllabus turns off 강의계획서 retrieval. Syllabi come from
+	// sugang.snu.ac.kr rather than Canvas, so this is the switch for when that
+	// system is the thing that is broken.
+	SkipSyllabus bool
 }
 
 // FileResult describes one file the run acted on.
@@ -151,6 +156,18 @@ func (s *Syncer) Run(ctx context.Context, opts Options) (*Result, error) {
 
 	result := &Result{Dir: dir}
 	dirNames := courseDirNames(courses)
+
+	// One client for the whole run: the sugang session is established once and
+	// reused across courses.
+	var sylClient *syllabus.Client
+	if !opts.SkipSyllabus {
+		c, err := syllabus.NewClient()
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("syllabus client: %v", err))
+		} else {
+			sylClient = c
+		}
+	}
 	taken := manifest.TakenPaths()
 	var takenMu sync.Mutex
 
@@ -213,6 +230,12 @@ func (s *Syncer) Run(ctx context.Context, opts Options) (*Result, error) {
 		}
 
 		s.download(ctx, plans, opts, manifest, result, &cr)
+
+		// After the files, so a syllabus failure can never cost the run its
+		// course materials — sugang is a separate system with its own outages.
+		if sylClient != nil {
+			s.archiveSyllabus(ctx, sylClient, course, dirNames[course.ID], manifest, opts, result, &cr)
+		}
 
 		for _, w := range cr.Warnings {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %s", course.Name, w))
