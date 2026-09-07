@@ -51,3 +51,34 @@ func (c *Client) GetModules(ctx context.Context, courseID int) ([]Module, error)
 	}
 	return modules, nil
 }
+
+// GetFile fetches a single file's metadata within a course. This is the only
+// way to reach files in courses whose Files tab is disabled: the module item
+// gives a content_id, and this resolves it to a downloadable URL.
+func (c *Client) GetFile(ctx context.Context, courseID, fileID int) (*File, error) {
+	var f File
+	if err := c.getAll(ctx, fmt.Sprintf("/courses/%d/files/%d", courseID, fileID), nil, &f); err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
+// GetFolders lists a course's folders so file paths can mirror the LMS layout.
+func (c *Client) GetFolders(ctx context.Context, courseID int) ([]Folder, error) {
+	params := url.Values{"per_page": {"100"}}
+
+	raw, err := c.getPaginated(ctx, fmt.Sprintf("/courses/%d/folders", courseID), params)
+	if err != nil {
+		return nil, err
+	}
+
+	var folders []Folder
+	for _, r := range raw {
+		var f Folder
+		if err := json.Unmarshal(r, &f); err != nil {
+			continue
+		}
+		folders = append(folders, f)
+	}
+	return folders, nil
+}

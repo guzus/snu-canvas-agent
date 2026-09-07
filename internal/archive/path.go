@@ -1,0 +1,91 @@
+package archive
+
+import (
+	"fmt"
+	"path"
+	"strings"
+	"unicode"
+)
+
+// sanitizeSegment turns an LMS-supplied name into one safe path segment.
+// Canvas display names routinely contain "/" (e.g. "1주차 09/01"), and macOS
+// renders ":" in a POSIX name as "/" in Finder, so both have to go.
+func sanitizeSegment(name string) string {
+	name = strings.TrimSpace(name)
+
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r == '/' || r == '\\' || r == ':':
+			b.WriteRune('-')
+		case r == 0:
+			// drop
+		case unicode.IsControl(r):
+			b.WriteRune(' ')
+		default:
+			b.WriteRune(r)
+		}
+	}
+
+	out := strings.Join(strings.Fields(b.String()), " ")
+	out = strings.Trim(out, " .")
+	if out == "." || out == ".." {
+		return ""
+	}
+	return truncateName(out, 150)
+}
+
+// truncateName shortens a name to max bytes while preserving its extension,
+// so a pathological display name cannot blow past the filesystem limit.
+func truncateName(name string, max int) string {
+	if len(name) <= max {
+		return name
+	}
+	ext := path.Ext(name)
+	if len(ext) > 20 {
+		ext = ""
+	}
+	stem := name[:len(name)-len(ext)]
+	for len(stem) > 0 && len(stem)+len(ext) > max {
+		_, size := lastRune(stem)
+		stem = stem[:len(stem)-size]
+	}
+	return strings.TrimRight(stem, " .") + ext
+}
+
+func lastRune(s string) (rune, int) {
+	r := []rune(s)
+	if len(r) == 0 {
+		return 0, 0
+	}
+	last := r[len(r)-1]
+	return last, len(string(last))
+}
+
+// disambiguate appends the Canvas file ID before the extension when the
+// intended path is already claimed by a different file.
+func disambiguate(rel string, fileID int) string {
+	ext := path.Ext(rel)
+	return strings.TrimSuffix(rel, ext) + fmt.Sprintf("-%d", fileID) + ext
+}
+
+// folderRelPath converts a Canvas folder full_name ("course files/2주차") into
+// a relative directory, dropping the synthetic root segment Canvas prepends.
+func folderRelPath(fullName string) string {
+	fullName = strings.Trim(strings.TrimSpace(fullName), "/")
+	if fullName == "" {
+		return ""
+	}
+	parts := strings.Split(fullName, "/")
+	if len(parts) > 0 && (parts[0] == "course files" || parts[0] == "course_files") {
+		parts = parts[1:]
+	}
+
+	var clean []string
+	for _, p := range parts {
+		if s := sanitizeSegment(p); s != "" {
+			clean = append(clean, s)
+		}
+	}
+	return path.Join(clean...)
+}

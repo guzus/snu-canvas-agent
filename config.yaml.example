@@ -11,6 +11,13 @@ monitor:
   state_path: "lx-state.json"        # State file for tracking seen items
   # courses: [12345, 67890]          # Filter specific course IDs (empty = all)
 
+archive:
+  dir: "~/Documents/etl-archive"     # Where `lx-agent sync` stacks course files
+  max_file_mb: 0                     # Skip files larger than this (0 = no limit)
+  include_videos: false              # Lecture video/audio files are big; opt in explicitly
+  concurrency: 3                     # Parallel downloads
+  # courses: [12345, 67890]          # Restrict the archive to these course IDs
+
 notifier:
   provider: "stdout"                 # stdout | telegram | (extensible)
   telegram:

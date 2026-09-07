@@ -25,9 +25,24 @@ skills/learningx-telegram-cli/scripts/run-lx-agent-cli.sh courses
 skills/learningx-telegram-cli/scripts/run-lx-agent-cli.sh assignments
 skills/learningx-telegram-cli/scripts/run-lx-agent-cli.sh files
 skills/learningx-telegram-cli/scripts/run-lx-agent-cli.sh announcements
+skills/learningx-telegram-cli/scripts/run-lx-agent-cli.sh sync --dry-run
+skills/learningx-telegram-cli/scripts/run-lx-agent-cli.sh sync --notify
 skills/learningx-telegram-cli/scripts/run-lx-agent-cli.sh bot
 skills/learningx-telegram-cli/scripts/run-lx-agent-cli.sh serve
 ```
+
+## Archive Sync
+
+`sync` mirrors every course file to `archive.dir` and is what the scheduled
+launchd job runs.
+
+- `sync --dry-run` lists what would be fetched without writing anything.
+- `sync --course <id>` restricts the run to one course.
+- `sync --include-videos` also pulls lecture video/audio.
+- Downloads are keyed by Canvas file ID in `archive-manifest.json`, so re-runs
+  transfer nothing new.
+- Exit code 1 means files failed or the credential expired — check the log
+  rather than assuming a quiet run succeeded.
 
 ## Notes
 

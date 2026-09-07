@@ -26,7 +26,7 @@ import (
 
 type config struct {
 	Canvas struct {
-		URL   string `yaml:"url"`
+		URL           string `yaml:"url"`
 		Token         string `yaml:"token"`
 		SessionCookie string `yaml:"session_cookie"`
 	} `yaml:"canvas"`
@@ -44,6 +44,13 @@ type config struct {
 			ChatID   string `yaml:"chat_id"`
 		} `yaml:"telegram"`
 	} `yaml:"notifier"`
+	Archive struct {
+		Dir           string `yaml:"dir"`
+		MaxFileMB     int64  `yaml:"max_file_mb"`
+		IncludeVideos bool   `yaml:"include_videos"`
+		Concurrency   int    `yaml:"concurrency"`
+		Courses       []int  `yaml:"courses"`
+	} `yaml:"archive"`
 	Database struct {
 		URL string `yaml:"url"`
 	} `yaml:"database"`
@@ -112,6 +119,9 @@ func main() {
 	case "announcements":
 		requireCanvasConfig(cfg, cmd)
 		handleAnnouncements(ctx, client)
+	case "sync", "archive":
+		requireCanvasConfig(cfg, cmd)
+		handleSync(ctx, cfg, client, logger, cmdArgs)
 	case "bot":
 		handleBot(cfg, client, logger)
 	case "serve":
@@ -503,6 +513,15 @@ func applyEnvOverrides(cfg *config) {
 		cfg.Notifier.Telegram.ChatID = v
 		cfg.Notifier.Provider = "telegram"
 	}
+	if v := strings.TrimSpace(os.Getenv("CANVAS_TOKEN")); v != "" {
+		cfg.Canvas.Token = v
+	}
+	if v := strings.TrimSpace(os.Getenv("CANVAS_SESSION_COOKIE")); v != "" {
+		cfg.Canvas.SessionCookie = v
+	}
+	if v := strings.TrimSpace(os.Getenv("ARCHIVE_DIR")); v != "" {
+		cfg.Archive.Dir = v
+	}
 	if v := strings.TrimSpace(os.Getenv("DATABASE_URL")); v != "" {
 		cfg.Database.URL = v
 	}
@@ -520,6 +539,12 @@ func applyDefaults(cfg *config) {
 	}
 	if cfg.Notifier.Provider == "" {
 		cfg.Notifier.Provider = "stdout"
+	}
+	if cfg.Archive.Dir == "" {
+		cfg.Archive.Dir = "~/Documents/etl-archive"
+	}
+	if cfg.Archive.Concurrency <= 0 {
+		cfg.Archive.Concurrency = 3
 	}
 }
 
@@ -596,6 +621,7 @@ Commands:
   assignments [course-id]
   files [course-id]
   announcements
+  sync [--out DIR] [--course ID]... [--dry-run] [--include-videos] [--max-mb N] [--notify]
   bind-chat [chat-id]
   bot
   serve
@@ -604,15 +630,21 @@ Commands:
   config`)
 }
 
+// hasCanvasConfig reports whether Canvas calls can be authenticated. Either
+// credential works: myetl.snu.ac.kr rejects Bearer tokens and needs the session
+// cookie, while stock Canvas instances take the token.
 func hasCanvasConfig(cfg config) bool {
-	return strings.TrimSpace(cfg.Canvas.URL) != "" && strings.TrimSpace(cfg.Canvas.Token) != ""
+	if strings.TrimSpace(cfg.Canvas.URL) == "" {
+		return false
+	}
+	return strings.TrimSpace(cfg.Canvas.Token) != "" || strings.TrimSpace(cfg.Canvas.SessionCookie) != ""
 }
 
 func requireCanvasConfig(cfg config, cmd string) {
 	if hasCanvasConfig(cfg) {
 		return
 	}
-	exitErr(fmt.Errorf("%s requires canvas.url and canvas.token in config", cmd))
+	exitErr(fmt.Errorf("%s requires canvas.url plus canvas.token or canvas.session_cookie in config", cmd))
 }
 
 func exitErr(err error) {
