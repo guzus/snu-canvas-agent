@@ -421,6 +421,14 @@ func (s *Syncer) download(ctx context.Context, plans []plan, opts Options, manif
 			defer cancel()
 
 			n, err := s.client.DownloadTo(dlCtx, p.file.URL, p.abs)
+			if err == nil && p.file.Size > 0 && n != p.file.Size {
+				// An expired file verifier makes Canvas serve a 200 OK login
+				// page instead of the file. Without this check that HTML would
+				// land on disk and be recorded as a complete download, so the
+				// file would never be retried.
+				os.Remove(p.abs)
+				err = fmt.Errorf("size mismatch: got %d bytes, expected %d (auth or verifier likely expired)", n, p.file.Size)
+			}
 
 			mu.Lock()
 			defer mu.Unlock()

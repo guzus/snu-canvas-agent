@@ -256,3 +256,40 @@ func TestDryRunWritesNothing(t *testing.T) {
 		t.Fatalf("dry run wrote %d entries to disk", len(entries))
 	}
 }
+
+// Canvas answers an expired file verifier with 200 OK and a login page. That
+// must not be recorded as a complete download, or the file is never retried.
+func TestShortBodyIsNotRecordedAsComplete(t *testing.T) {
+	f := newFakeCanvas(t, true)
+	dir := t.TempDir()
+
+	// Serve a body shorter than the advertised size, as a login page would be.
+	f.server.Config.Handler.(*http.ServeMux).HandleFunc("/download/short",
+		func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "<html>login") })
+
+	s := newSyncer(f)
+	res, err := s.Run(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if res.Downloaded == 0 {
+		t.Fatal("baseline run downloaded nothing")
+	}
+
+	// Now corrupt one manifest entry's file to a short body and re-run.
+	target := filepath.Join(dir, "자료구조 (2026-1)", "1주차", "1주차 09-01 개요.pdf")
+	if err := os.WriteFile(target, []byte("<html>login"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res2, err := s.Run(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if res2.Downloaded != 1 {
+		t.Fatalf("truncated local file was not refetched: downloaded=%d", res2.Downloaded)
+	}
+	if b, _ := os.ReadFile(target); string(b) != "PDFBYTES" {
+		t.Fatalf("file not repaired: %q", b)
+	}
+}
