@@ -463,9 +463,15 @@ func (s *Syncer) planFile(
 
 	updated := false
 	if prev, ok := manifest.Get(f.ID); ok {
-		rel = prev.RelPath // keep the path it was first archived at
-		if !s.needsRefresh(opts.Dir, prev, f) {
-			return plan{}, true, "current"
+		// Keep the path it was first archived at — unless another file now
+		// holds that path on disk. Entries written before normalization-aware
+		// keying can collide this way; reusing the path would keep the two
+		// files overwriting each other forever, so re-plan onto a free name.
+		if owner, taken := taken[pathKey(prev.RelPath)]; !taken || owner == f.ID {
+			rel = prev.RelPath
+			if !s.needsRefresh(opts.Dir, prev, f) {
+				return plan{}, true, "current"
+			}
 		}
 		updated = true
 	}

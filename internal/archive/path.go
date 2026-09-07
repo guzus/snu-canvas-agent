@@ -5,13 +5,19 @@ import (
 	"path"
 	"strings"
 	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // sanitizeSegment turns an LMS-supplied name into one safe path segment.
 // Canvas display names routinely contain "/" (e.g. "1주차 09/01"), and macOS
 // renders ":" in a POSIX name as "/" in Finder, so both have to go.
 func sanitizeSegment(name string) string {
-	name = strings.TrimSpace(name)
+	// Canvas serves display names in whichever normalization the uploader's
+	// machine used, so the same title arrives as NFC from one course and as
+	// decomposed NFD jamo from another. Normalize so generated names are
+	// consistent.
+	name = strings.TrimSpace(norm.NFC.String(name))
 
 	var b strings.Builder
 	for _, r := range name {
@@ -62,12 +68,18 @@ func lastRune(s string) (rune, int) {
 	return last, len(string(last))
 }
 
-// pathKey is the identity a path has *on disk*. macOS volumes are
-// case-insensitive by default, so "Lecture.pdf" and "lecture.pdf" are one file
-// there — comparing raw strings would let two Canvas files overwrite each other
-// and then re-download in alternation on every scheduled run.
+// pathKey is the identity a path has *on disk*, which is coarser than Go
+// string equality in two ways that both bite in practice:
+//
+//   - macOS volumes are case-insensitive, so "Lecture.pdf" and "lecture.pdf"
+//     are one file.
+//   - They are also normalization-insensitive. Observed live on myETL: two
+//     distinct course files whose names are the same text, one stored NFC and
+//     one as decomposed NFD jamo. Go compares them as different strings, the
+//     filesystem stores them as one file, and the two overwrite each other and
+//     re-download on every run forever.
 func pathKey(rel string) string {
-	return strings.ToLower(rel)
+	return strings.ToLower(norm.NFC.String(rel))
 }
 
 // disambiguate appends the Canvas file ID before the extension when the

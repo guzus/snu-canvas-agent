@@ -118,18 +118,27 @@ func (m *Manifest) Put(fileID int, e Entry) {
 	m.Files[strconv.Itoa(fileID)] = e
 }
 
-// TakenPaths returns every relpath already claimed by a file other than
-// exceptID, so a new file with a colliding display name can be disambiguated.
+// TakenPaths maps each claimed on-disk path to the file ID holding it.
+//
+// Two entries can map to one key when their names collide only by case or
+// Unicode normalization. The lowest ID wins, deterministically: an arbitrary
+// winner would hand the path to a different file on each run, and the two would
+// re-download in alternation forever — the very churn this guards against.
 func (m *Manifest) TakenPaths() map[string]int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
 	out := make(map[string]int, len(m.Files))
 	for k, e := range m.Files {
 		id, err := strconv.Atoi(k)
 		if err != nil {
 			continue
 		}
-		out[e.RelPath] = id
+		key := pathKey(e.RelPath)
+		if prev, ok := out[key]; ok && prev <= id {
+			continue
+		}
+		out[key] = id
 	}
 	return out
 }

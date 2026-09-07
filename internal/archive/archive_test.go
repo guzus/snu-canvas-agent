@@ -13,8 +13,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/mgnlia/lx-agent/internal/canvas"
+	"golang.org/x/text/unicode/norm"
 )
 
 // fakeCanvas mimics an SNU-style instance: the Files tab is disabled (403), so
@@ -223,6 +225,28 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// assertDistinctOnDisk checks the two paths are genuinely two files. Comparing
+// the path strings would be circular here: the whole bug is that two different
+// strings name one file, so only the filesystem's own answer settles it.
+func assertDistinctOnDisk(t *testing.T, dir, relA, relB string) {
+	t.Helper()
+
+	statOf := func(rel string) (os.FileInfo, string) {
+		abs := filepath.Join(dir, filepath.FromSlash(rel))
+		info, err := os.Stat(abs)
+		if err != nil {
+			t.Fatalf("%s missing on disk: %v", rel, err)
+		}
+		return info, abs
+	}
+
+	ia, _ := statOf(relA)
+	ib, _ := statOf(relB)
+	if os.SameFile(ia, ib) {
+		t.Fatalf("both entries resolve to one file on disk:\n  %q\n  %q", relA, relB)
+	}
+}
+
 func newSyncer(f *fakeCanvas) *Syncer {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	return New(canvas.NewClient(f.server.URL, "tok", logger), logger)
@@ -415,9 +439,7 @@ func TestCaseOnlyNameCollisionGetsDistinctPaths(t *testing.T) {
 	if !okA || !okB {
 		t.Fatalf("both files should be archived: %v %v", okA, okB)
 	}
-	if strings.EqualFold(a.RelPath, b.RelPath) {
-		t.Fatalf("case-only collision shares one on-disk path: %q vs %q", a.RelPath, b.RelPath)
-	}
+	assertDistinctOnDisk(t, dir, a.RelPath, b.RelPath)
 
 	// The real symptom of the bug: a second run re-downloads forever.
 	before := atomic.LoadInt64(&f.downloadCount)
@@ -569,5 +591,105 @@ func TestGenuinelyEmptyCourseIsNotFlagged(t *testing.T) {
 	}
 	if len(res.Unreachable) != 0 {
 		t.Fatalf("Unreachable = %v, want none", res.Unreachable)
+	}
+}
+
+// Observed live on myETL: two distinct course files whose display names are the
+// same text, one stored NFC and one as decomposed NFD jamo. Go compares the
+// strings as different; macOS stores them as one file. Without normalization-
+// aware path keys the two overwrite each other and re-download on every run.
+func TestUnicodeNormalizationCollisionDoesNotChurn(t *testing.T) {
+	const nfc = "착한 나.pdf"
+	nfd := norm.NFD.String(nfc)
+	if nfc == nfd {
+		t.Fatal("fixture is not actually denormalized")
+	}
+
+	f := newFakeCanvas(t, true)
+	f.extraFiles = []map[string]any{
+		fileJSONSized(41, nfc, 3, "", 8),
+		fileJSONSized(42, nfd, 3, "", 8),
+	}
+	dir := t.TempDir()
+	s := newSyncer(f)
+
+	if _, err := s.Run(context.Background(), Options{Dir: dir}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	m := NewManifest(dir)
+	if err := m.Load(); err != nil {
+		t.Fatal(err)
+	}
+	a, okA := m.Get(41)
+	b, okB := m.Get(42)
+	if !okA || !okB {
+		t.Fatalf("both files should be archived: %v %v", okA, okB)
+	}
+	assertDistinctOnDisk(t, dir, a.RelPath, b.RelPath)
+
+	// The symptom that matters: a repeating job must settle, not churn.
+	for i := 0; i < 3; i++ {
+		res, err := s.Run(context.Background(), Options{Dir: dir})
+		if err != nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+		if res.Downloaded != 0 {
+			t.Fatalf("run %d re-downloaded %d files; the archive never settles", i, res.Downloaded)
+		}
+	}
+}
+
+// A manifest written before normalization-aware keying must repair itself
+// rather than keep two files pointed at one path.
+func TestLegacyCollidingManifestSelfHeals(t *testing.T) {
+	const nfc = "착한 나.pdf"
+	nfd := norm.NFD.String(nfc)
+
+	f := newFakeCanvas(t, true)
+	f.extraFiles = []map[string]any{
+		fileJSONSized(41, nfc, 3, "", 8),
+		fileJSONSized(42, nfd, 3, "", 8),
+	}
+	dir := t.TempDir()
+
+	// Seed the broken state exactly as the live manifest recorded it: the two
+	// relpaths are different Go strings (one NFC, one NFD) but one file on
+	// disk. A raw string comparison sees no collision here.
+	course := "자료구조 (2026-1)"
+	m := NewManifest(dir)
+	m.Put(41, Entry{
+		CourseID: 101, CourseName: course,
+		RelPath: course + "/1주차/" + nfc,
+		Size:    8, UpdatedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
+	})
+	m.Put(42, Entry{
+		CourseID: 101, CourseName: course,
+		RelPath: course + "/1주차/" + nfd,
+		Size:    8, UpdatedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
+	})
+	if err := m.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newSyncer(f)
+	if _, err := s.Run(context.Background(), Options{Dir: dir}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	healed := NewManifest(dir)
+	if err := healed.Load(); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := healed.Get(41)
+	b, _ := healed.Get(42)
+	assertDistinctOnDisk(t, dir, a.RelPath, b.RelPath)
+
+	res, err := s.Run(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("settle run: %v", err)
+	}
+	if res.Downloaded != 0 {
+		t.Fatalf("archive still churning after repair: %d", res.Downloaded)
 	}
 }
