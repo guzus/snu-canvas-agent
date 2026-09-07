@@ -86,7 +86,40 @@ Notes that matter in practice:
   Canvas returns 401 the run sends a Telegram alert and exits non-zero instead
   of quietly archiving nothing.
 
-### Schedule it (macOS)
+### Schedule it (Linux host, recommended)
+
+The archive belongs on an always-on machine, not a laptop that sleeps:
+
+```bash
+./deploy/gunux/deploy.sh              # build, ship, install the systemd timer
+./deploy/gunux/deploy.sh --seed       # also rsync an existing local archive up
+./deploy/gunux/deploy.sh --run        # trigger a run now, tail the journal
+./deploy/gunux/deploy.sh --status
+./deploy/gunux/deploy.sh --uninstall
+```
+
+Defaults to `HOST=gunux`, `ARCHIVE_DIR=/ssd1/etl-archive`, every 6 hours; all
+three are env overrides. The script cross-compiles a static `linux/amd64`
+binary here — CGO is off, so the host needs no Go toolchain to stay current —
+uploads it beside the target and renames it into place (replacing a running
+binary in-place gives `ETXTBSY`), installs the config at mode 600, and refuses
+to finish unless a live `courses` call succeeds on the host.
+
+Both units are systemd **user** units, so they need lingering enabled
+(`loginctl enable-linger`); the script checks and enables it. The timer uses
+`Persistent=true`, so a run missed while the box was off fires on boot instead
+of being skipped. `TimeoutStartSec=3h` caps a wedged run so it cannot block
+every later firing.
+
+```bash
+ssh gunux journalctl --user -u lx-archive.service -f
+```
+
+Seeding matters: the manifest is keyed by Canvas file ID and stores relative
+paths, so an existing archive transplants cleanly with `rsync` and the first
+remote run finds it already complete — no re-downloading gigabytes from SNU.
+
+### Schedule it (macOS, laptop-local)
 
 ```bash
 ./deploy/launchd/install.sh                 # every 6 hours
@@ -94,22 +127,15 @@ INTERVAL=3600 ./deploy/launchd/install.sh   # hourly
 ./deploy/launchd/install.sh --uninstall
 ```
 
-The installer builds a real binary to `~/.local/bin/lx-agent`, verifies auth
-with a live `courses` call before scheduling anything, and loads
-`xyz.guzus.lx-archive`. It uses `StartInterval` rather than a calendar time:
-a sleeping laptop misses a calendar firing but catches an interval on wake.
+It uses `StartInterval` rather than a calendar time: a sleeping laptop misses a
+calendar firing but catches an interval on wake.
 
-**Keep the archive out of `~/Documents`, `~/Desktop` and `~/Downloads.**
+**Keep the archive out of `~/Documents`, `~/Desktop` and `~/Downloads`.**
 macOS TCC gates those folders, and a headless launchd job that touches one
 blocks in `open()` forever, waiting on a consent dialog no one will ever see —
 observed here as a job that ran 8 minutes using 0.03s of CPU with no network
 activity. The installer refuses such a path unless you grant the binary Full
 Disk Access and pass `ALLOW_TCC_DIR=1`.
-
-```bash
-launchctl kickstart -p gui/$(id -u)/xyz.guzus.lx-archive   # run now
-tail -f ~/Library/Logs/lx-archive.log                      # watch it
-```
 
 ## CLI Commands
 

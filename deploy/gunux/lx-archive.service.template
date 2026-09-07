@@ -1,0 +1,26 @@
+[Unit]
+Description=LearningX course-file archive sync
+Documentation=https://github.com/guzus/snu-canvas-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+Environment=ARCHIVE_DIR=__ARCHIVE_DIR__
+ExecStart=%h/.local/bin/lx-agent -config %h/.config/lx-agent/config.yaml sync --notify
+
+# A run is ~1 minute once the archive is warm; the first one pulls everything.
+# The cap exists so a wedged run cannot block every later firing — the failure
+# mode that makes a scheduled archiver quietly stop working.
+TimeoutStartSec=3h
+
+# stdout/stderr go to the journal: journalctl --user -u lx-archive.service
+StandardOutput=journal
+StandardError=journal
+
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target

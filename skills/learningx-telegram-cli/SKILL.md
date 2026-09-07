@@ -43,6 +43,9 @@ launchd job runs.
   transfer nothing new.
 - Exit code 1 means files failed or the credential expired — check the log
   rather than assuming a quiet run succeeded.
+- Scheduled on `gunux` as a systemd user timer. Operate it with
+  `deploy/gunux/deploy.sh --status|--run|--uninstall`, or read the journal
+  directly: `ssh gunux journalctl --user -u lx-archive.service -n 50`.
 
 ## Notes
 

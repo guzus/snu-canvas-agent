@@ -1,0 +1,17 @@
+[Unit]
+Description=Run the LearningX archive sync on a schedule
+
+[Timer]
+OnCalendar=__ONCALENDAR__
+
+# Catch up after downtime: a run missed while the box was off fires on boot
+# rather than being skipped until the next slot.
+Persistent=true
+
+# Don't hit SNU at exactly the same second every time.
+RandomizedDelaySec=300
+
+Unit=lx-archive.service
+
+[Install]
+WantedBy=timers.target

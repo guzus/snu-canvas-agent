@@ -7,3 +7,4 @@ apps/admin-frontend/dist/
 apps/admin-backend/dist/
 apps/admin-backend/data/codex_account.json
 bun.lockb
+/dist/
