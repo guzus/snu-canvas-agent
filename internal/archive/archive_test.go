@@ -26,6 +26,7 @@ type fakeCanvas struct {
 	courseListErr         int
 	perCourseStatus       int // status returned by every per-course endpoint
 	omitInlineModuleItems bool
+	secondCourseExpired   bool
 	extraFiles            []map[string]any
 }
 
@@ -41,9 +42,13 @@ func newFakeCanvas(t *testing.T, filesTabOK bool) *fakeCanvas {
 			fmt.Fprint(w, `{"status":"unauthenticated"}`)
 			return
 		}
-		writeJSON(w, []map[string]any{
+		courses := []map[string]any{
 			{"id": 101, "name": "자료구조 (2026-1)", "course_code": "M1522"},
-		})
+		}
+		if f.secondCourseExpired {
+			courses = append(courses, map[string]any{"id": 102, "name": "알고리즘 (2026-1)", "course_code": "M1523"})
+		}
+		writeJSON(w, courses)
 	})
 
 	gate := func(w http.ResponseWriter) bool {
@@ -149,6 +154,12 @@ func newFakeCanvas(t *testing.T, filesTabOK bool) *fakeCanvas {
 			return
 		}
 		writeJSON(w, []map[string]any{})
+	})
+
+	// Every endpoint of the second course reports a dead session.
+	mux.HandleFunc("/api/v1/courses/102/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"status":"unauthenticated"}`)
 	})
 
 	mux.HandleFunc("/download/", func(w http.ResponseWriter, r *http.Request) {
@@ -461,5 +472,40 @@ func TestPartSuffixedFileIsNotClobbered(t *testing.T) {
 		if string(b) != "PDFBYTES" {
 			t.Fatalf("%s content = %q", name, b)
 		}
+	}
+}
+
+// A session dying on a later course must not throw away the courses already
+// downloaded — otherwise the next run refetches everything.
+func TestManifestSurvivesMidRunAuthExpiry(t *testing.T) {
+	f := newFakeCanvas(t, true)
+	f.secondCourseExpired = true
+	dir := t.TempDir()
+
+	_, err := newSyncer(f).Run(context.Background(), Options{Dir: dir})
+	if !errors.Is(err, ErrAuthExpired) {
+		t.Fatalf("err = %v, want ErrAuthExpired", err)
+	}
+
+	m := NewManifest(dir)
+	if err := m.Load(); err != nil {
+		t.Fatalf("manifest: %v", err)
+	}
+	if m.Count() == 0 {
+		t.Fatal("manifest lost every file downloaded before the session expired")
+	}
+
+	// The decisive check: a later run must not refetch what is already on disk.
+	f.secondCourseExpired = false
+	before := atomic.LoadInt64(&f.downloadCount)
+	res, err := newSyncer(f).Run(context.Background(), Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("recovery run: %v", err)
+	}
+	if res.Downloaded != 0 {
+		t.Fatalf("recovery run re-downloaded %d files already archived", res.Downloaded)
+	}
+	if got := atomic.LoadInt64(&f.downloadCount); got != before {
+		t.Fatalf("download count grew from %d to %d", before, got)
 	}
 }

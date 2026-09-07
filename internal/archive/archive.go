@@ -130,6 +130,18 @@ func (s *Syncer) Run(ctx context.Context, opts Options) (*Result, error) {
 		return nil, fmt.Errorf("load manifest: %w", err)
 	}
 
+	// persist after every course, not just at the end: a session that expires
+	// on course 5 of 12 would otherwise throw away the four already on disk,
+	// and the next run would re-download all of them.
+	persist := func() {
+		if opts.DryRun {
+			return
+		}
+		if err := manifest.Save(); err != nil {
+			s.logger.Warn("save archive manifest", "err", err)
+		}
+	}
+
 	courses, err := s.selectCourses(ctx, opts.Courses)
 	if err != nil {
 		return nil, err
@@ -148,6 +160,7 @@ func (s *Syncer) Run(ctx context.Context, opts Options) (*Result, error) {
 			// Caught mid-run: the course list succeeded but the session died
 			// before the files were read. Reporting a clean run here is the
 			// failure that makes a scheduled archiver worthless.
+			persist() // keep what earlier courses already downloaded
 			return nil, fmt.Errorf("%w (while reading %s)", ErrAuthExpired, course.Name)
 		}
 		cr.Warnings = en.warnings
@@ -192,6 +205,7 @@ func (s *Syncer) Run(ctx context.Context, opts Options) (*Result, error) {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %s", course.Name, w))
 		}
 		result.Courses = append(result.Courses, cr)
+		persist()
 	}
 
 	if !opts.DryRun {
@@ -485,8 +499,14 @@ func (s *Syncer) download(ctx context.Context, plans []plan, opts Options, manif
 				// page instead of the file. Without this check that HTML would
 				// land on disk and be recorded as a complete download, so the
 				// file would never be retried.
+				//
+				// The size comes from Canvas metadata, so log both numbers and
+				// what the body looks like: if this ever fires for every file,
+				// one log line should say whether it is a login page or stale
+				// metadata rather than leaving a mystery.
+				hint := sniffBody(p.abs)
 				os.Remove(p.abs)
-				err = fmt.Errorf("size mismatch: got %d bytes, expected %d (auth or verifier likely expired)", n, p.file.Size)
+				err = fmt.Errorf("size mismatch: got %d bytes, Canvas reported %d (%s)", n, p.file.Size, hint)
 			}
 
 			mu.Lock()
@@ -596,6 +616,29 @@ func expandDir(dir string) (string, error) {
 		dir = filepath.Join(home, strings.TrimPrefix(dir, "~"))
 	}
 	return filepath.Abs(dir)
+}
+
+// sniffBody classifies a downloaded body that failed its size check, so the
+// log distinguishes "Canvas served the login page" from "metadata is stale".
+func sniffBody(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return "unreadable"
+	}
+	defer f.Close()
+
+	buf := make([]byte, 512)
+	n, _ := f.Read(buf)
+	head := strings.ToLower(strings.TrimSpace(string(buf[:n])))
+
+	switch {
+	case strings.HasPrefix(head, "<!doctype html"), strings.HasPrefix(head, "<html"):
+		return "body is an HTML page — auth or file verifier likely expired"
+	case n == 0:
+		return "empty body"
+	default:
+		return "body does not look like HTML; Canvas size metadata may be stale"
+	}
 }
 
 func shortErr(err error) string {

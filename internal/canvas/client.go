@@ -245,6 +245,13 @@ func (c *Client) DownloadTo(ctx context.Context, fileURL, dst string) (int64, er
 		return 0, closeErr
 	}
 
+	// The server's own claim about what it just sent. A short read with valid
+	// HTTP framing would otherwise look like a clean download.
+	if resp.ContentLength >= 0 && n != resp.ContentLength {
+		os.Remove(tmp)
+		return 0, fmt.Errorf("truncated transfer: got %d of %d bytes", n, resp.ContentLength)
+	}
+
 	if err := os.Rename(tmp, dst); err != nil {
 		os.Remove(tmp)
 		return 0, err

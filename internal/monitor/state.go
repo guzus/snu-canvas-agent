@@ -8,17 +8,17 @@ import (
 )
 
 type State struct {
-	mu       sync.Mutex
-	path     string
-	Data     StateData `json:"data"`
+	mu   sync.Mutex
+	path string
+	Data StateData `json:"data"`
 }
 
 type StateData struct {
-	LastCheck      time.Time        `json:"last_check"`
-	SeenFiles      map[int]int64    `json:"seen_files"`       // fileID -> size
-	SeenAssignments map[int]bool    `json:"seen_assignments"` // assignmentID -> true
-	SeenAnnouncements map[int]bool  `json:"seen_announcements"`
-	AlertedDeadlines map[int]string `json:"alerted_deadlines"` // assignmentID -> last alert level
+	LastCheck         time.Time      `json:"last_check"`
+	SeenFiles         map[int]int64  `json:"seen_files"`       // fileID -> size
+	SeenAssignments   map[int]bool   `json:"seen_assignments"` // assignmentID -> true
+	SeenAnnouncements map[int]bool   `json:"seen_announcements"`
+	AlertedDeadlines  map[int]string `json:"alerted_deadlines"` // assignmentID -> last alert level
 }
 
 func NewState(path string) *State {
