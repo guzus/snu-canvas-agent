@@ -18,7 +18,12 @@ const GradesFile = "성적.html"
 //
 // Scores and feedback comments live only in the LMS and disappear with the
 // enrollment, so they are archived as a document rather than left as API data.
-func renderGrades(course canvas.Course, grades *canvas.Grades, subs []canvas.Submission) []byte {
+func renderGrades(
+	course canvas.Course,
+	grades *canvas.Grades,
+	subs []canvas.Submission,
+	resolve htmldoc.LinkResolver,
+) []byte {
 	b := htmldoc.Open(course.Name+" 성적", "제출물 · 점수 · 피드백 기록")
 
 	var head [][2]string
@@ -95,12 +100,16 @@ func renderGrades(course canvas.Course, grades *canvas.Grades, subs []canvas.Sub
 		}
 	}
 
+	// Assignment briefs are course-authored HTML. Escaping them printed raw
+	// <a href=...> markup at the reader and hid that the linked file is already
+	// archived; they are sanitized instead, with Canvas file links repointed at
+	// the local copy.
 	htmldoc.Heading(b, "과제 안내")
 	for _, s := range subs {
-		if s.Assignment == nil || strings.TrimSpace(s.Assignment.Description) == "" {
+		if s.Assignment == nil {
 			continue
 		}
-		htmldoc.Section(b, assignmentName(s), s.Assignment.Description)
+		htmldoc.RichSection(b, assignmentName(s), s.Assignment.Description, resolve)
 	}
 
 	return htmldoc.Close(b, fmt.Sprintf("myetl.snu.ac.kr · %s 기준", time.Now().Format("2006-01-02")))

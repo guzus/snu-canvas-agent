@@ -40,7 +40,16 @@ func (s *Syncer) archiveGrades(
 		cr.Warnings = append(cr.Warnings, fmt.Sprintf("grades unavailable (%v)", shortErr(err)))
 	}
 
+	// Resolve Canvas file links against the manifest so a brief that links
+	// hw2.zip opens the archived hw2.zip instead of requiring a live session.
+	resolve := func(fileID int) (string, bool) {
+		if _, ok := manifest.Get(fileID); !ok {
+			return "", false
+		}
+		return fmt.Sprintf("/file/%d", fileID), true
+	}
+
 	rel := path.Join(courseDir, SubmissionsDir, GradesFile)
-	s.writeGenerated(course, rel, GradesFile, renderGrades(course, grades, subs),
+	s.writeGenerated(course, rel, GradesFile, renderGrades(course, grades, subs, resolve),
 		gradesEntryID(course.ID), manifest, opts, result, cr)
 }

@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -38,7 +39,7 @@ func TestGradesReportCarriesScoresFeedbackAndInlineWork(t *testing.T) {
 	course := canvas.Course{ID: 101, Name: "2024-2 Algorithms (002)"}
 	grades := &canvas.Grades{CurrentScore: f64(92.72), FinalScore: f64(92.72)}
 
-	out := string(renderGrades(course, grades, sampleSubs()))
+	out := string(renderGrades(course, grades, sampleSubs(), nil))
 
 	for _, want := range []string{
 		"2024-2 Algorithms (002) 성적",
@@ -56,18 +57,18 @@ func TestGradesReportCarriesScoresFeedbackAndInlineWork(t *testing.T) {
 		}
 	}
 
-	// Assignment descriptions arrive as HTML; <br> becomes a line break and
-	// everything else stays escaped.
-	if strings.Contains(out, "<p>Implement") {
-		t.Error("assignment description HTML was not escaped")
+	// Assignment briefs are course-authored HTML and are rendered, not escaped:
+	// escaping printed raw markup at the reader.
+	if strings.Contains(out, "&lt;p&gt;") {
+		t.Error("assignment brief was escaped instead of rendered")
 	}
-	if strings.Contains(out, "&lt;br&gt;") {
-		t.Error("<br> rendered as visible text")
+	if !strings.Contains(out, "<br>") {
+		t.Error("line break lost from the brief")
 	}
 }
 
 func TestGradesReportWithoutGradesStillLists(t *testing.T) {
-	out := string(renderGrades(canvas.Course{ID: 1, Name: "C"}, nil, sampleSubs()))
+	out := string(renderGrades(canvas.Course{ID: 1, Name: "C"}, nil, sampleSubs(), nil))
 	if !strings.Contains(out, "Homework 2") {
 		t.Error("submissions missing when enrollment grades are unavailable")
 	}
@@ -82,7 +83,7 @@ func TestGradesReportEscapesFeedback(t *testing.T) {
 		Assignment:   &canvas.Assignment{Name: `<img src=x onerror=alert(1)>`},
 		Comments:     []canvas.SubmissionComment{{Comment: "<script>alert(1)</script>"}},
 	}}
-	out := string(renderGrades(canvas.Course{Name: "C"}, nil, subs))
+	out := string(renderGrades(canvas.Course{Name: "C"}, nil, subs, nil))
 
 	if strings.Contains(out, "<script>alert(1)</script>") || strings.Contains(out, "<img src=x") {
 		t.Fatal("report did not escape untrusted content")
@@ -112,5 +113,46 @@ func TestGradesEntryIDCannotCollideWithSyllabus(t *testing.T) {
 	}
 	if grades >= 0 {
 		t.Fatal("generated-document ids must be negative to stay out of the Canvas id space")
+	}
+}
+
+// Assignment briefs link to files this tool has already archived. Those links
+// must point at the local copy, or the document is useless without a live
+// Canvas session — which is the situation the archive exists for.
+func TestGradesReportRepointsFileLinksAtTheArchive(t *testing.T) {
+	subs := []canvas.Submission{{
+		AssignmentID: 1,
+		Assignment: &canvas.Assignment{
+			Name: "Homework 2",
+			Description: `<p><a class="instructure_file_link" title="hw2.zip" ` +
+				`href="https://myetl.snu.ac.kr/courses/296215/files/8219881/download?wrap=1" ` +
+				`target="_blank">hw2.zip</a></p>` +
+				`<p><a href="https://myetl.snu.ac.kr/courses/296215/files/999999/download">gone.zip</a></p>`,
+		},
+	}}
+
+	archived := map[int]bool{8219881: true}
+	resolve := func(id int) (string, bool) {
+		if !archived[id] {
+			return "", false
+		}
+		return "/file/" + strconv.Itoa(id), true
+	}
+
+	out := string(renderGrades(canvas.Course{Name: "C"}, nil, subs, resolve))
+
+	if !strings.Contains(out, `href="/file/8219881"`) {
+		t.Error("archived file link was not repointed at the local copy")
+	}
+	// A file that was never archived keeps its original URL, so a live session
+	// can still reach it.
+	if !strings.Contains(out, "files/999999/download") {
+		t.Error("unarchived link should keep its original URL")
+	}
+	if strings.Contains(out, "instructure_file_link") {
+		t.Error("class attribute should be dropped")
+	}
+	if !strings.Contains(out, ">hw2.zip<") {
+		t.Error("link text lost")
 	}
 }

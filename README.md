@@ -140,6 +140,14 @@ cannot. Each run archives, under `<course>/제출물/`:
 - `성적.html` — scores per assignment, submission dates, late/missing flags,
   instructor feedback comments, text/URL submissions, and the assignment briefs.
 
+Assignment briefs are course-authored HTML. They are sanitized to a readable
+subset rather than escaped — escaping printed raw `<a href=...>` markup at the
+reader — and **Canvas file links are repointed at the archived copy**, so a
+brief that links `hw2.zip` opens the archived `hw2.zip` with no live session.
+Links to files that were never archived keep their original URL. Scripts,
+styles, iframes, forms, event handlers and `javascript:`/`data:` URLs are
+removed; unknown tags are unwrapped so no text is lost.
+
 Measured across 20 courses: 133 submissions, 97 graded, 59 uploaded files, 12
 feedback comments, 11 final grades.
 

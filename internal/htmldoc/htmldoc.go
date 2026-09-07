@@ -27,6 +27,11 @@ td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 p.body{white-space:pre-wrap;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:0}
 .files a{display:block;padding:9px 12px;background:var(--panel);border:1px solid var(--line);border-radius:10px;margin-bottom:6px;color:var(--accent);text-decoration:none}
 .note{color:var(--muted);font-size:13px;margin-top:6px}
+.rich{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 14px}
+.rich a{color:var(--accent)}
+.rich img{max-width:100%}
+.rich pre{overflow-x:auto}
+.rich table{margin:10px 0}
 footer{margin-top:34px;color:var(--muted);font-size:12px}`
 
 // Open starts a document and writes the header.
@@ -80,6 +85,15 @@ func Section(b *bytes.Buffer, heading, body string) {
 		return
 	}
 	fmt.Fprintf(b, `<h2>%s</h2><p class="body">%s</p>`, Esc(heading), EscBody(body))
+}
+
+// RichSection writes a heading plus course-authored HTML, sanitized.
+func RichSection(b *bytes.Buffer, heading, rawHTML string, resolve LinkResolver) {
+	body := Sanitize(rawHTML, resolve)
+	if strings.TrimSpace(body) == "" {
+		return
+	}
+	fmt.Fprintf(b, `<h2>%s</h2><div class="rich">%s</div>`, Esc(heading), body)
 }
 
 // Heading writes a section heading.
