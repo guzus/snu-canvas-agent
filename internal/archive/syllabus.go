@@ -26,6 +26,9 @@ func syllabusEntryID(courseID, index int) int {
 	return -(courseID*100 + index)
 }
 
+// gradesEntryID uses a reserved slot in that same negative space.
+func gradesEntryID(courseID int) int { return -(courseID*100 + 90) }
+
 // archiveSyllabus retrieves one course's 강의계획서 and writes it under the
 // course directory.
 //
@@ -66,42 +69,8 @@ func (s *Syncer) archiveSyllabus(
 
 	write := func(rel string, content []byte, label string) {
 		idx++
-		id := syllabusEntryID(course.ID, idx)
-
-		if opts.DryRun {
-			result.Downloaded++
-			cr.Downloaded++
-			result.New = append(result.New, FileResult{
-				CourseName: course.Name, Display: label, RelPath: rel, Size: int64(len(content)),
-			})
-			return
-		}
-
-		abs := filepath.Join(opts.Dir, filepath.FromSlash(rel))
-		if sameContent(abs, content) {
-			cr.Skipped++
-			result.Skipped++
-			manifest.Put(id, syllabusEntry(course, rel, label, int64(len(content)), content))
-			return
-		}
-
-		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-			s.recordFailure(result, cr, course.Name, label, err)
-			return
-		}
-		if err := os.WriteFile(abs, content, 0o644); err != nil {
-			s.recordFailure(result, cr, course.Name, label, err)
-			return
-		}
-
-		manifest.Put(id, syllabusEntry(course, rel, label, int64(len(content)), content))
-		cr.Downloaded++
-		result.Downloaded++
-		result.Bytes += int64(len(content))
-		result.New = append(result.New, FileResult{
-			CourseName: course.Name, Display: label, RelPath: rel, Size: int64(len(content)),
-		})
-		s.logger.Info("archived syllabus", "course", course.Name, "file", rel)
+		s.writeGenerated(course, rel, label, content, syllabusEntryID(course.ID, idx),
+			manifest, opts, result, cr)
 	}
 
 	write(path.Join(base, "강의계획서.html"), syllabus.Render(course.Name, syl), "강의계획서.html")
@@ -197,4 +166,55 @@ func sameContent(abs string, content []byte) bool {
 		return false
 	}
 	return sha256.Sum256(existing) == sha256.Sum256(content)
+}
+
+// writeGenerated stores a document this tool produced rather than downloaded.
+//
+// These have no upstream revision timestamp, so an unchanged run is detected by
+// comparing content — which also means a rerun rewrites nothing and the file's
+// mtime stays meaningful.
+func (s *Syncer) writeGenerated(
+	course canvas.Course,
+	rel, label string,
+	content []byte,
+	id int,
+	manifest *Manifest,
+	opts Options,
+	result *Result,
+	cr *CourseResult,
+) {
+	if opts.DryRun {
+		result.Downloaded++
+		cr.Downloaded++
+		result.New = append(result.New, FileResult{
+			CourseName: course.Name, Display: label, RelPath: rel, Size: int64(len(content)),
+		})
+		return
+	}
+
+	abs := filepath.Join(opts.Dir, filepath.FromSlash(rel))
+	if sameContent(abs, content) {
+		cr.Skipped++
+		result.Skipped++
+		manifest.Put(id, syllabusEntry(course, rel, label, int64(len(content)), content))
+		return
+	}
+
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		s.recordFailure(result, cr, course.Name, label, err)
+		return
+	}
+	if err := os.WriteFile(abs, content, 0o644); err != nil {
+		s.recordFailure(result, cr, course.Name, label, err)
+		return
+	}
+
+	manifest.Put(id, syllabusEntry(course, rel, label, int64(len(content)), content))
+	cr.Downloaded++
+	result.Downloaded++
+	result.Bytes += int64(len(content))
+	result.New = append(result.New, FileResult{
+		CourseName: course.Name, Display: label, RelPath: rel, Size: int64(len(content)),
+	})
+	s.logger.Info("archived document", "course", course.Name, "file", rel)
 }

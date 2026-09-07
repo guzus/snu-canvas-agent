@@ -72,6 +72,8 @@ func handleSync(ctx context.Context, cfg config, client *canvas.Client, logger *
 			opts.IncludeVideos = true
 		case arg == "--no-syllabus":
 			opts.SkipSyllabus = true
+		case arg == "--no-submissions":
+			opts.SkipSubmissions = true
 		case arg == "--notify":
 			notify = true
 		default:

@@ -23,18 +23,26 @@ func (e *APIError) Error() string {
 }
 
 // IsAuthExpired reports whether the credential itself is no longer valid.
-// Canvas answers 401 (and an "unauthenticated" body) once a session cookie or
-// token expires; a bare 403 usually means the resource is disabled for this
-// user, not that auth is dead.
+//
+// Status alone cannot decide this. Observed live on myETL: a course the student
+// may not read answers /students/submissions with 401 and a body of
+// {"status":"권한이 없음"} — a permission fact about one course, not a dead
+// session. Treating every 401 as expiry aborted the whole run over a single
+// inaccessible course, so expiry requires Canvas's explicit "unauthenticated"
+// marker.
+//
+// A genuinely dead credential is still caught: the course listing fails first,
+// and a session that dies mid-run makes every source fail for a course, which
+// the caller reports as a failure rather than as an empty course.
 func IsAuthExpired(err error) bool {
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		return false
 	}
-	if apiErr.StatusCode == 401 {
-		return true
+	if apiErr.StatusCode != 401 && apiErr.StatusCode != 403 {
+		return false
 	}
-	return apiErr.StatusCode == 403 && strings.Contains(strings.ToLower(apiErr.Body), "unauthenticated")
+	return strings.Contains(strings.ToLower(apiErr.Body), "unauthenticated")
 }
 
 // IsForbidden reports whether the resource exists but is not readable by this

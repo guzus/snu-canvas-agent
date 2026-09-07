@@ -80,3 +80,41 @@ type ModuleItem struct {
 	HTMLURL     string `json:"html_url"`
 	ExternalURL string `json:"external_url,omitempty"`
 }
+
+// Submission is the student's own work on one assignment.
+type Submission struct {
+	ID             int                 `json:"id"`
+	CourseID       int                 `json:"-"`
+	AssignmentID   int                 `json:"assignment_id"`
+	Score          *float64            `json:"score"`
+	Grade          string              `json:"grade"`
+	SubmittedAt    *time.Time          `json:"submitted_at"`
+	GradedAt       *time.Time          `json:"graded_at"`
+	SubmissionType string              `json:"submission_type"`
+	Body           string              `json:"body"`
+	URL            string              `json:"url"`
+	Attempt        int                 `json:"attempt"`
+	Late           bool                `json:"late"`
+	Missing        bool                `json:"missing"`
+	Excused        bool                `json:"excused"`
+	Attachments    []File              `json:"attachments"`
+	Comments       []SubmissionComment `json:"submission_comments"`
+	Assignment     *Assignment         `json:"assignment"`
+}
+
+// SubmissionComment is instructor (or peer) feedback on a submission.
+type SubmissionComment struct {
+	ID         int       `json:"id"`
+	AuthorName string    `json:"author_name"`
+	Comment    string    `json:"comment"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// Grades is the student's standing in a course.
+type Grades struct {
+	HTMLURL      string   `json:"html_url"`
+	CurrentScore *float64 `json:"current_score"`
+	FinalScore   *float64 `json:"final_score"`
+	CurrentGrade string   `json:"current_grade"`
+	FinalGrade   string   `json:"final_grade"`
+}

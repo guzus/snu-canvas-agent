@@ -27,7 +27,9 @@ archive:
   concurrency: 3                     # Parallel downloads
   # courses: [12345, 67890]          # Restrict the archive to these course IDs
                                      # 강의계획서 is fetched too (sugang.snu.ac.kr);
-                                     # disable with `sync --no-syllabus`
+                                     # disable with `sync --no-syllabus`;
+                                     # your own submissions + grades are archived
+                                     # too — disable with `sync --no-submissions`
 
 notifier:
   provider: "stdout"                 # stdout | hooker | telegram

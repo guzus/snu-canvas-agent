@@ -672,7 +672,7 @@ Commands:
   assignments [course-id]
   files [course-id]
   announcements
-  sync [--out DIR] [--course ID]... [--dry-run] [--include-videos] [--max-mb N] [--no-syllabus] [--notify]
+  sync [--out DIR] [--course ID]... [--dry-run] [--include-videos] [--max-mb N] [--no-syllabus] [--no-submissions] [--notify]
   web [--listen host:port] [--dir DIR]
   notify-test
   bind-chat [chat-id]

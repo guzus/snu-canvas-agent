@@ -6,6 +6,8 @@ Built for [서울대 Learning X](https://myetl.snu.ac.kr), compatible with Canva
 
 ## Features
 
+- **Your own graded work**: submitted files, scores and instructor feedback —
+  the part of a course that exists nowhere else
 - **강의계획서 (syllabus) archiving**: fetched from sugang.snu.ac.kr, which is
   where SNU actually keeps them
 - **Run summaries**: an external model CLI describes what each run added, in the
@@ -88,6 +90,13 @@ Notes that matter in practice:
   gone.
 - **Locked files are skipped**, not written as empty stubs.
 - **Video/audio is opt-in** (`--include-videos` / `archive.include_videos`).
+- **A 401 is not proof of expiry.** Observed live: a course the student may not
+  read answers `/students/submissions` with 401 and `{"status":"권한이 없음"}`.
+  Treating any 401 as a dead credential aborted the whole run over one
+  inaccessible course, so expiry now requires Canvas's explicit
+  `unauthenticated` marker. A genuinely dead credential is still caught — the
+  course listing fails first, and a session dying mid-run makes every source
+  fail for a course, which is reported as a failure rather than an empty course.
 - **Expired credentials are loud.** The credential is the thing that rots; when
   Canvas returns 401 the run alerts through hooker at priority 5 and exits
   non-zero instead of quietly archiving nothing. Routine "N files archived"
@@ -121,6 +130,25 @@ Two details that are easy to get wrong:
 
 Disable with `sync --no-syllabus` (for when sugang, not Canvas, is the thing
 that is down).
+
+### 제출물 (your own work and grades)
+
+Lecture slides can be asked for again; a graded submission and its feedback
+cannot. Each run archives, under `<course>/제출물/`:
+
+- every file you submitted, in a folder per assignment,
+- `성적.html` — scores per assignment, submission dates, late/missing flags,
+  instructor feedback comments, text/URL submissions, and the assignment briefs.
+
+Measured across 20 courses: 133 submissions, 97 graded, 59 uploaded files, 12
+feedback comments, 11 final grades.
+
+Submitted files are real Canvas files with real ids, so they flow through the
+same manifest, size verification and idempotency as course material. They are
+pinned to the assignment folder rather than their Canvas folder id, which points
+into the submitter's own space and would otherwise decide where they land.
+
+Disable with `sync --no-submissions`.
 
 ### Run summaries
 

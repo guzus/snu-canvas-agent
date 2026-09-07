@@ -38,6 +38,8 @@ type Options struct {
 	// sugang.snu.ac.kr rather than Canvas, so this is the switch for when that
 	// system is the thing that is broken.
 	SkipSyllabus bool
+	// SkipSubmissions turns off archiving the student's own graded work.
+	SkipSubmissions bool
 }
 
 // FileResult describes one file the run acted on.
@@ -95,6 +97,7 @@ type enumeration struct {
 	warnings    []string
 	authExpired bool
 	sourcesOK   int
+	submissions []canvas.Submission
 }
 
 // candidate is one file discovered by any enumeration source.
@@ -102,6 +105,10 @@ type candidate struct {
 	file     canvas.File
 	source   string
 	pathHint string // used when the file's folder is unknown (module-only files)
+	// forcePath pins the file to pathHint even when its folder is known. A
+	// submission attachment carries a folder id from the submitter's own
+	// space, which must not decide where it lands in the course tree.
+	forcePath bool
 }
 
 // fileLinkRe finds Canvas file references embedded in assignment and
@@ -174,7 +181,7 @@ func (s *Syncer) Run(ctx context.Context, opts Options) (*Result, error) {
 	for _, course := range courses {
 		cr := CourseResult{CourseID: course.ID, CourseName: course.Name}
 
-		en := s.enumerate(ctx, course.ID)
+		en := s.enumerate(ctx, course.ID, opts.SkipSubmissions)
 		if en.authExpired {
 			// Caught mid-run: the course list succeeded but the session died
 			// before the files were read. Reporting a clean run here is the
@@ -236,6 +243,9 @@ func (s *Syncer) Run(ctx context.Context, opts Options) (*Result, error) {
 		if sylClient != nil {
 			s.archiveSyllabus(ctx, sylClient, course, dirNames[course.ID], manifest, opts, result, &cr)
 		}
+		if !opts.SkipSubmissions && len(en.submissions) > 0 {
+			s.archiveGrades(ctx, course, dirNames[course.ID], en.submissions, manifest, opts, result, &cr)
+		}
 
 		for _, w := range cr.Warnings {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %s", course.Name, w))
@@ -294,7 +304,7 @@ func (s *Syncer) selectCourses(ctx context.Context, want []int) ([]canvas.Course
 // instances frequently disable the Files tab, in which case /files 403s and the
 // materials are only reachable through module items — so a single source is not
 // enough to call the archive complete.
-func (s *Syncer) enumerate(ctx context.Context, courseID int) enumeration {
+func (s *Syncer) enumerate(ctx context.Context, courseID int, skipSubmissions bool) enumeration {
 	en := enumeration{folders: make(map[int]string)}
 	seen := make(map[int]bool)
 
@@ -304,6 +314,15 @@ func (s *Syncer) enumerate(ctx context.Context, courseID int) enumeration {
 		}
 		seen[f.ID] = true
 		en.candidates = append(en.candidates, candidate{file: f, source: source, pathHint: hint})
+	}
+
+	addPinned := func(f canvas.File, source, hint string) {
+		if f.ID == 0 || seen[f.ID] {
+			return
+		}
+		seen[f.ID] = true
+		en.candidates = append(en.candidates,
+			candidate{file: f, source: source, pathHint: hint, forcePath: true})
 	}
 
 	// note records a source's outcome. An expired credential is fatal to the
@@ -376,6 +395,19 @@ func (s *Syncer) enumerate(ctx context.Context, courseID int) enumeration {
 					f.DisplayName = item.Title
 				}
 				add(*f, "module", hint)
+			}
+		}
+	}
+
+	if !skipSubmissions {
+		subs, err := s.client.GetSelfSubmissions(ctx, courseID)
+		if note("submissions", err) {
+			en.submissions = subs
+			for _, sub := range subs {
+				hint := path.Join(SubmissionsDir, sanitizeSegment(submissionFolder(sub)))
+				for _, f := range sub.Attachments {
+					addPinned(f, "submission", hint)
+				}
 			}
 		}
 	}
@@ -476,7 +508,7 @@ func (s *Syncer) planFile(
 	}
 
 	sub := folders[f.FolderID]
-	if sub == "" {
+	if sub == "" || c.forcePath {
 		sub = c.pathHint
 	}
 
