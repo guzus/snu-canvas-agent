@@ -40,6 +40,12 @@ type Options struct {
 	SkipSyllabus bool
 	// SkipSubmissions turns off archiving the student's own graded work.
 	SkipSubmissions bool
+	// SkipHomepage turns off mirroring a course's own website. Some instructors
+	// (운영체제 is the type specimen) put slides on a lab page, not in Canvas.
+	SkipHomepage bool
+	// Homepages maps Canvas course ID → course website URL. When empty, the
+	// URL is taken from the syllabus "과목 홈페이지" line if one is there.
+	Homepages map[int]string
 }
 
 // FileResult describes one file the run acted on.
@@ -240,8 +246,12 @@ func (s *Syncer) Run(ctx context.Context, opts Options) (*Result, error) {
 
 		// After the files, so a syllabus failure can never cost the run its
 		// course materials — sugang is a separate system with its own outages.
+		var remarks string
 		if sylClient != nil {
-			s.archiveSyllabus(ctx, sylClient, course, dirNames[course.ID], manifest, opts, result, &cr)
+			remarks = s.archiveSyllabus(ctx, sylClient, course, dirNames[course.ID], manifest, opts, result, &cr)
+		}
+		if !opts.SkipHomepage {
+			s.archiveHomepage(ctx, course, dirNames[course.ID], remarks, manifest, opts, result, &cr)
 		}
 		if !opts.SkipSubmissions && len(en.submissions) > 0 {
 			s.archiveGrades(ctx, course, dirNames[course.ID], en.submissions, manifest, opts, result, &cr)

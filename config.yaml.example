@@ -30,6 +30,12 @@ archive:
                                      # disable with `sync --no-syllabus`;
                                      # your own submissions + grades are archived
                                      # too — disable with `sync --no-submissions`
+  # homepages:                       # course ID → website; empty = parse
+  #   305829: "https://csl.snu.ac.kr/courses/4190.307/2026-2/"
+                                     # "과목 홈페이지" from the syllabus. Some
+                                     # instructors (운영체제) put slides there,
+                                     # not in Canvas. Disable with
+                                     # `sync --no-homepage`.
 
 notifier:
   provider: "stdout"                 # stdout | hooker | telegram

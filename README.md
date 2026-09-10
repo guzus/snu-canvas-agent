@@ -131,6 +131,29 @@ Two details that are easy to get wrong:
 Disable with `sync --no-syllabus` (for when sugang, not Canvas, is the thing
 that is down).
 
+### 과목 홈페이지 (course websites)
+
+Canvas is not where every instructor puts the slides. 운영체제 (4190.307) is
+the type specimen: the syllabus points at
+`https://csl.snu.ac.kr/courses/4190.307/2026-2/`, and that is where lecture
+PDFs and project posts live. Each run therefore:
+
+1. reads a `과목 홈페이지:` / `Course homepage:` URL out of the syllabus remarks
+   (or `archive.homepages` in config, which wins when set),
+2. crawls that path — not the lab root — for documents (PDF, PPT, ZIP, …),
+   following same-path HTML pages one hop (so a News page that links a file is
+   not missed),
+3. writes them under `<course>/과목홈페이지/`, plus `homepage.html` /
+   `homepage.json` so the URL is recorded even when the site is empty, and
+   `index.html` as a snapshot of the page as fetched.
+
+Off-site links (OSTEP chapters, GitHub project specs, the xv6 tree) are listed
+in the note, not downloaded. A URL whose path is shallower than two segments
+is refused, because crawling `https://csl.snu.ac.kr/` would pull every course
+the lab has ever taught.
+
+Disable with `sync --no-homepage`.
+
 ### 제출물 (your own work and grades)
 
 Lecture slides can be asked for again; a graded submission and its feedback
@@ -286,7 +309,7 @@ forces a download).
 - `files [course-id]`
 - `announcements`
 - `notify-test`
-- `sync [--out DIR] [--course ID]... [--dry-run] [--include-videos] [--max-mb N] [--notify]`
+- `sync [--out DIR] [--course ID]... [--dry-run] [--include-videos] [--max-mb N] [--no-syllabus] [--no-homepage] [--no-submissions] [--notify]`
 - `bind-chat [chat-id]`
 - `bot`
 - `serve`
@@ -351,9 +374,29 @@ bun run admin:frontend
 
 ## Architecture
 
+```mermaid
+flowchart LR
+  subgraph sources [Sources]
+    Canvas[Canvas / myETL]
+    Sugang[sugang.snu.ac.kr]
+    Site[과목 홈페이지]
+  end
+  subgraph archive [etl-archive]
+    Files[course files]
+    Syl[강의계획서]
+    Home[과목홈페이지]
+    Sub[제출물]
+  end
+  Canvas --> Files
+  Canvas --> Sub
+  Sugang --> Syl
+  Site --> Home
+  Syl -.->|과목 홈페이지 URL| Site
+```
+
 - `cmd/lx-agent/main.go`: CLI entrypoint and wiring
 - `internal/canvas/*`: Canvas API client
-- `internal/archive/*`: course-file mirror + manifest for `sync`
+- `internal/archive/*`: course-file mirror + manifest for `sync` (Canvas files, 강의계획서, 과목 홈페이지, 제출물)
 - `internal/monitor/*`: monitor loop + state tracking
 - `internal/notifier/*`: stdout + Telegram notifier/bot
 - `internal/binding/*`: Postgres token/chat binding + language preferences

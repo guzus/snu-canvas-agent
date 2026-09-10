@@ -26,6 +26,7 @@ func handleSync(ctx context.Context, cfg config, client *canvas.Client, logger *
 		IncludeVideos: cfg.Archive.IncludeVideos,
 		Concurrency:   cfg.Archive.Concurrency,
 		MaxFileBytes:  cfg.Archive.MaxFileMB * 1024 * 1024,
+		Homepages:     cfg.Archive.Homepages,
 	}
 	notify := false
 
@@ -72,6 +73,8 @@ func handleSync(ctx context.Context, cfg config, client *canvas.Client, logger *
 			opts.IncludeVideos = true
 		case arg == "--no-syllabus":
 			opts.SkipSyllabus = true
+		case arg == "--no-homepage":
+			opts.SkipHomepage = true
 		case arg == "--no-submissions":
 			opts.SkipSubmissions = true
 		case arg == "--notify":

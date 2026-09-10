@@ -56,11 +56,12 @@ type config struct {
 		Timeout string `yaml:"timeout"`
 	} `yaml:"summary"`
 	Archive struct {
-		Dir           string `yaml:"dir"`
-		MaxFileMB     int64  `yaml:"max_file_mb"`
-		IncludeVideos bool   `yaml:"include_videos"`
-		Concurrency   int    `yaml:"concurrency"`
-		Courses       []int  `yaml:"courses"`
+		Dir           string         `yaml:"dir"`
+		MaxFileMB     int64          `yaml:"max_file_mb"`
+		IncludeVideos bool           `yaml:"include_videos"`
+		Concurrency   int            `yaml:"concurrency"`
+		Courses       []int          `yaml:"courses"`
+		Homepages     map[int]string `yaml:"homepages"`
 	} `yaml:"archive"`
 	Database struct {
 		URL string `yaml:"url"`
@@ -672,7 +673,7 @@ Commands:
   assignments [course-id]
   files [course-id]
   announcements
-  sync [--out DIR] [--course ID]... [--dry-run] [--include-videos] [--max-mb N] [--no-syllabus] [--no-submissions] [--notify]
+  sync [--out DIR] [--course ID]... [--dry-run] [--include-videos] [--max-mb N] [--no-syllabus] [--no-homepage] [--no-submissions] [--notify]
   web [--listen host:port] [--dir DIR]
   notify-test
   bind-chat [chat-id]

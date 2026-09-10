@@ -51,5 +51,5 @@ func (s *Syncer) archiveGrades(
 
 	rel := path.Join(courseDir, SubmissionsDir, GradesFile)
 	s.writeGenerated(course, rel, GradesFile, renderGrades(course, grades, subs, resolve),
-		gradesEntryID(course.ID), manifest, opts, result, cr)
+		gradesEntryID(course.ID), "grades", manifest, opts, result, cr)
 }

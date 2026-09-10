@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/mgnlia/lx-agent/internal/canvas"
@@ -45,23 +46,23 @@ func (s *Syncer) archiveSyllabus(
 	opts Options,
 	result *Result,
 	cr *CourseResult,
-) {
+) string {
 	body, err := s.client.GetSyllabusBody(ctx, course.ID)
 	if err != nil {
 		cr.Warnings = append(cr.Warnings, fmt.Sprintf("syllabus unavailable (%v)", shortErr(err)))
-		return
+		return ""
 	}
 
 	ref, ok := syllabus.ParseRef(body)
 	if !ok {
 		cr.Warnings = append(cr.Warnings, "syllabus has no sugang reference")
-		return
+		return ""
 	}
 
 	syl, err := client.Fetch(ctx, ref)
 	if err != nil {
 		cr.Warnings = append(cr.Warnings, fmt.Sprintf("syllabus fetch failed (%v)", shortErr(err)))
-		return
+		return ""
 	}
 
 	base := path.Join(courseDir, SyllabusDir)
@@ -70,7 +71,7 @@ func (s *Syncer) archiveSyllabus(
 	write := func(rel string, content []byte, label string) {
 		idx++
 		s.writeGenerated(course, rel, label, content, syllabusEntryID(course.ID, idx),
-			manifest, opts, result, cr)
+			"syllabus", manifest, opts, result, cr)
 	}
 
 	write(path.Join(base, "강의계획서.html"), syllabus.Render(course.Name, syl), "강의계획서.html")
@@ -112,7 +113,7 @@ func (s *Syncer) archiveSyllabus(
 			os.Remove(tmp)
 			cr.Skipped++
 			result.Skipped++
-			manifest.Put(id, syllabusEntry(course, rel, name, n, content))
+			manifest.Put(id, generatedEntry(course, rel, name, "syllabus", n, content))
 			continue
 		}
 		if err := os.Rename(tmp, abs); err != nil {
@@ -121,7 +122,7 @@ func (s *Syncer) archiveSyllabus(
 			continue
 		}
 
-		manifest.Put(id, syllabusEntry(course, rel, name, n, content))
+		manifest.Put(id, generatedEntry(course, rel, name, "syllabus", n, content))
 		cr.Downloaded++
 		result.Downloaded++
 		result.Bytes += n
@@ -130,16 +131,31 @@ func (s *Syncer) archiveSyllabus(
 		})
 		s.logger.Info("archived syllabus attachment", "course", course.Name, "file", rel, "bytes", n)
 	}
+
+	return syllabusRemarks(syl)
+}
+
+func syllabusRemarks(syl *syllabus.Syllabus) string {
+	t3, _ := syl.Raw["LISTTAB03"].(map[string]any)
+	if t3 == nil {
+		return ""
+	}
+	for _, k := range []string{"ltPlanDocRemk", "ltPlanDocEngRemk"} {
+		if s, ok := t3[k].(string); ok && strings.TrimSpace(s) != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func (s *Syncer) recordFailure(result *Result, cr *CourseResult, course, name string, err error) {
 	cr.Failed++
 	result.Failed++
 	result.Errors = append(result.Errors, fmt.Sprintf("%s / %s: %v", course, name, shortErr(err)))
-	s.logger.Warn("syllabus write failed", "course", course, "file", name, "err", err)
+	s.logger.Warn("archive write failed", "course", course, "file", name, "err", err)
 }
 
-func syllabusEntry(course canvas.Course, rel, name string, size int64, content []byte) Entry {
+func generatedEntry(course canvas.Course, rel, name, source string, size int64, content []byte) Entry {
 	sum := sha256.Sum256(content)
 	return Entry{
 		CourseID:     course.ID,
@@ -147,9 +163,9 @@ func syllabusEntry(course canvas.Course, rel, name string, size int64, content [
 		RelPath:      rel,
 		DisplayName:  name,
 		Size:         size,
-		UpdatedAt:    time.Time{}, // sugang exposes no revision timestamp
+		UpdatedAt:    time.Time{}, // no upstream revision timestamp
 		DownloadedAt: time.Now().UTC(),
-		Source:       "syllabus",
+		Source:       source,
 		Checksum:     hex.EncodeToString(sum[:]),
 	}
 }
@@ -178,6 +194,7 @@ func (s *Syncer) writeGenerated(
 	rel, label string,
 	content []byte,
 	id int,
+	source string,
 	manifest *Manifest,
 	opts Options,
 	result *Result,
@@ -196,7 +213,7 @@ func (s *Syncer) writeGenerated(
 	if sameContent(abs, content) {
 		cr.Skipped++
 		result.Skipped++
-		manifest.Put(id, syllabusEntry(course, rel, label, int64(len(content)), content))
+		manifest.Put(id, generatedEntry(course, rel, label, source, int64(len(content)), content))
 		return
 	}
 
@@ -209,7 +226,7 @@ func (s *Syncer) writeGenerated(
 		return
 	}
 
-	manifest.Put(id, syllabusEntry(course, rel, label, int64(len(content)), content))
+	manifest.Put(id, generatedEntry(course, rel, label, source, int64(len(content)), content))
 	cr.Downloaded++
 	result.Downloaded++
 	result.Bytes += int64(len(content))
